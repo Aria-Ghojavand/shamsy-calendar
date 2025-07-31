@@ -1,280 +1,90 @@
-name: Build and Release
+name: Build Scal CLI
 
 on:
   push:
-    tags:
-      - 'v*'
-  pull_request:
-    branches: [ main, master ]
-  workflow_dispatch:
-
-env:
-  GO_VERSION: '1.24'
-  APP_NAME: 'scal'
+    branches:
+      - 'main'
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: ${{ env.GO_VERSION }}
-        cache: false
-    
-    - name: Download dependencies
-      run: go mod download
-    
-
   build:
-    needs: test
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            goos: linux
-            goarch: amd64
-            name: linux-amd64
-          - os: ubuntu-latest
-            goos: linux
-            goarch: arm64
-            name: linux-arm64
-          - os: ubuntu-latest
-            goos: windows
-            goarch: amd64
-            name: windows-amd64
-            ext: .exe
-          - os: ubuntu-latest
-            goos: darwin
-            goarch: amd64
-            name: darwin-amd64
-          - os: ubuntu-latest
-            goos: darwin
-            goarch: arm64
-            name: darwin-arm64
-    
-    runs-on: ${{ matrix.os }}
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: ${{ env.GO_VERSION }}
-        cache: false
-    
-    - name: Get version
-      id: version
-      run: |
-        if [[ $GITHUB_REF == refs/tags/* ]]; then
-          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-        else
-          echo "version=0.0.0-dev" >> $GITHUB_OUTPUT
-        fi
-    
-    - name: Build binary
-      env:
-        GOOS: ${{ matrix.goos }}
-        GOARCH: ${{ matrix.goarch }}
-        CGO_ENABLED: 0
-      run: |
-        mkdir -p dist
-        go build -ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}" -o dist/${{ env.APP_NAME }}-${{ matrix.name }}${{ matrix.ext }} .
-    
-    - name: Upload binary
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ env.APP_NAME }}-${{ matrix.name }}
-        path: dist/${{ env.APP_NAME }}-${{ matrix.name }}${{ matrix.ext }}
-        retention-days: 1
-
-  package-linux:
-    needs: build
+    name: Build Scal CLI
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     strategy:
-      fail-fast: false
       matrix:
-        arch: [amd64, arm64]
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Download binary
-      uses: actions/download-artifact@v4
-      with:
-        name: ${{ env.APP_NAME }}-linux-${{ matrix.arch }}
-        path: .
-    
-    - name: Get version
-      id: version
-      run: |
-        if [[ $GITHUB_REF == refs/tags/* ]]; then
-          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-        else
-          echo "version=0.0.0-dev" >> $GITHUB_OUTPUT
-        fi
-    
-    - name: Install packaging tools
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y dpkg-dev rpm
-    
-    - name: Create DEB package
-      run: |
-        VERSION="${{ steps.version.outputs.version }}"
-        ARCH="${{ matrix.arch }}"
-        PKG_DIR="deb-pkg"
-        
-        # Clean version (remove 'v' prefix and ensure it starts with digit)
-        CLEAN_VERSION="${VERSION#v}"
-        if [[ ! $CLEAN_VERSION =~ ^[0-9] ]]; then
-          CLEAN_VERSION="0.0.0-${CLEAN_VERSION}"
-        fi
-        
-        mkdir -p ${PKG_DIR}/DEBIAN
-        mkdir -p ${PKG_DIR}/usr/bin
-        
-        # Copy binary
-        cp ${{ env.APP_NAME }}-linux-${ARCH} ${PKG_DIR}/usr/bin/${{ env.APP_NAME }}
-        chmod 755 ${PKG_DIR}/usr/bin/${{ env.APP_NAME }}
-        
-        # Create control file
-        cat > ${PKG_DIR}/DEBIAN/control << EOF
-        Package: ${{ env.APP_NAME }}
-        Version: ${CLEAN_VERSION}
-        Section: utils
-        Priority: optional
-        Architecture: ${ARCH}
-        Maintainer: Developer <dev@example.com>
-        Description: Persian Calendar CLI
-         Command-line Persian calendar tool
-        EOF
-        
-        # Build package
-        dpkg-deb --build ${PKG_DIR} ${{ env.APP_NAME }}_${CLEAN_VERSION}_${ARCH}.deb
-    
-    - name: Create RPM package
-      run: |
-        VERSION="${{ steps.version.outputs.version }}"
-        ARCH="${{ matrix.arch }}"
-        
-        # Clean version (remove 'v' prefix and ensure it starts with digit)
-        CLEAN_VERSION="${VERSION#v}"
-        if [[ ! $CLEAN_VERSION =~ ^[0-9] ]]; then
-          CLEAN_VERSION="0.0.0-${CLEAN_VERSION}"
-        fi
-        
-        mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-        mkdir -p ~/rpmbuild/BUILDROOT/usr/bin
-        
-        # Copy binary
-        cp ${{ env.APP_NAME }}-linux-${ARCH} ~/rpmbuild/BUILDROOT/usr/bin/${{ env.APP_NAME }}
-        chmod 755 ~/rpmbuild/BUILDROOT/usr/bin/${{ env.APP_NAME }}
-        
-        # Create spec file
-        cat > ~/rpmbuild/SPECS/${{ env.APP_NAME }}.spec << EOF
-        Name: ${{ env.APP_NAME }}
-        Version: ${CLEAN_VERSION}
-        Release: 1
-        Summary: Persian Calendar CLI
-        License: MIT
-        
-        %description
-        Command-line Persian calendar tool
-        
-        %files
-        /usr/bin/${{ env.APP_NAME }}
-        
-        %changelog
-        * $(date "+%a %b %d %Y") Developer <dev@example.com> - ${CLEAN_VERSION}-1
-        - Release ${VERSION}
-        EOF
-        
-        # Build RPM
-        rpmbuild --define "_topdir $HOME/rpmbuild" --define "_rpmdir ." -bb ~/rpmbuild/SPECS/${{ env.APP_NAME }}.spec
-        find . -name "*.rpm" -exec mv {} ${{ env.APP_NAME }}-${CLEAN_VERSION}-1.${ARCH}.rpm \;
-    
-    - name: Upload packages
-      uses: actions/upload-artifact@v4
-      with:
-        name: packages-${{ matrix.arch }}
-        path: |
-          *.deb
-          *.rpm
-        retention-days: 1
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+        exclude:
+          - goos: windows
+            goarch: arm64
 
-  release:
-    needs: [build, package-linux]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Download all artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        merge-multiple: true
-    
-    - name: List artifacts
-      run: |
-        echo "Downloaded artifacts:"
-        find artifacts -type f -exec ls -la {} \;
-    
-    - name: Generate release notes
-      run: |
-        TAG_NAME=${GITHUB_REF#refs/tags/}
-        
-        cat > release_notes.md << EOF
-        ## Scal ${TAG_NAME}
-        
-        Persian (Solar Hijri) calendar CLI tool.
-        
-        ### Installation
-        
-        **Linux (DEB):**
-        \`\`\`bash
-        sudo dpkg -i scal_*_amd64.deb
-        \`\`\`
-        
-        **Linux (RPM):**
-        \`\`\`bash
-        sudo rpm -i scal-*-1.amd64.rpm
-        \`\`\`
-        
-        **Binary:**
-        \`\`\`bash
-        chmod +x scal-*
-        sudo mv scal-* /usr/local/bin/scal
-        \`\`\`
-        
-        ### Usage
-        \`\`\`bash
-        scal                    # Current month
-        scal 1403               # Full year
-        scal 1403 6             # Specific month
-        scal 1403 6 --show-holidays  # With holidays
-        \`\`\`
-        EOF
-    
-    - name: Create Release
-      uses: softprops/action-gh-release@v2
-      with:
-        files: artifacts/*
-        body_path: release_notes.md
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Install dependencies for packaging
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm dpkg-dev
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          output="scal-${{ matrix.goos }}-${{ matrix.goarch }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            output="${output}.exe"
+          fi
+          go build -o $output main.go
+          mkdir -p artifacts
+          mv $output artifacts/
+
+      - name: Create .deb package
+        if: matrix.goos == 'linux'
+        run: |
+          mkdir -p deb/scal/usr/local/bin
+          cp artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }} deb/scal/usr/local/bin/scal
+          mkdir -p deb/scal/DEBIAN
+          echo "Package: scal
+Version: 1.0.0
+Section: utils
+Priority: optional
+Architecture: ${{ matrix.goarch }}
+Maintainer: Aria (Amir) Ghojavand <ariaghojavand@gmail.com>
+Description: Scal CLI tool
+Homepage: https://github.com/Amir-Ghojavand/scal" > deb/scal/DEBIAN/control
+          dpkg-deb --build deb/scal
+          mv deb/scal.deb artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.deb
+
+      - name: Create .rpm package
+        if: matrix.goos == 'linux'
+        run: |
+          mkdir -p rpm/BUILD rpm/RPMS rpm/SOURCES rpm/SPECS rpm/SRPMS
+          cp artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }} rpm/BUILD/scal
+          echo "Name: scal
+Version: 1.0.0
+Release: 1
+Summary: Scal CLI tool
+License: MIT
+Packager: Aria (Amir) Ghojavand <ariaghojavand@gmail.com>
+%description
+Scal CLI tool
+%files
+/usr/local/bin/scal
+%changelog
+* $(date +"%a %b %d %Y") Aria Ghojavand <ariaghojavand@gmail.com> 1.0.0-1
+- Initial release" > rpm/SPECS/scal.spec
+          rpmbuild --define "_topdir $(pwd)/rpm" -bb rpm/SPECS/scal.spec
+          mv rpm/RPMS/${{ matrix.goarch }}/scal-1.0.0-1.${{ matrix.goarch }}.rpm artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.rpm
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: scal-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: artifacts/*
