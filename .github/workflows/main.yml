@@ -58,7 +58,7 @@ Priority: optional
 Architecture: ${{ matrix.goarch }}
 Maintainer: Aria (Amir) Ghojavand <ariaghojavand@gmail.com>
 Description: Scal CLI tool
-Homepage: https://github.com/ariaghojavand/scal" > deb/scal/DEBIAN/control
+Homepage: https://github.com/Amir-Ghojavand/scal" > deb/scal/DEBIAN/control
           dpkg-deb --build deb/scal
           mv deb/scal.deb artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.deb
 
