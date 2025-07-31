@@ -81,12 +81,6 @@ jobs:
         if: matrix.goos == 'linux'
         run: |
           BIN=scal-${{ matrix.goos }}-${{ matrix.goarch }}
-          if [ "${{ matrix.goarch }}" = "amd64" ]; then
-            ARCH=x86_64
-          else
-            ARCH=arm64
-          fi
-
           mkdir -p rpm/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
           cp artifacts/debug-${{ matrix.goos }}-${{ matrix.goarch }} rpm/BUILD/scal
 
