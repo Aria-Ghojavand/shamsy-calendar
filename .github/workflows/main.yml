@@ -25,8 +25,15 @@ jobs:
         with:
           go-version: '1.24'
 
-      - name: Show Go env
-        run: go env
+      - name: Show Go & repo info
+        run: |
+          go version
+          go env
+
+      - name: Show repo tree
+        run: |
+          echo "PWD: $(pwd)"
+          ls -R .
 
       - name: Download dependencies
         run: go mod download
@@ -37,26 +44,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y rpm dpkg-dev
 
-      - name: Build binary
+      - name: Verbose Go build
         env:
-          # comment this out if your code needs cgo; otherwise pure-Go cross-build is easiest
-          CGO_ENABLED: '0'
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p artifacts
-          BIN=scal-${{ matrix.goos }}-${{ matrix.goarch }}
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            BIN=$BIN.exe
-          fi
-          # <-- build the module, not just main.go
-          go build -o artifacts/$BIN .
+          go build -v -x -o artifacts/debug-${{ matrix.goos }}-${{ matrix.goarch }} .
+
+      # packaging steps unchanged—
+      # once build succeeds you can revert "Verbose Go build" to your normal "Build binary" step
 
       - name: Create .deb
         if: matrix.goos == 'linux'
         run: |
+          BIN=scal-${{ matrix.goos }}-${{ matrix.goarch }}
           mkdir -p deb/scal/usr/local/bin deb/scal/DEBIAN
-          cp artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }} deb/scal/usr/local/bin/scal
+          cp artifacts/debug-${{ matrix.goos }}-${{ matrix.goarch }} deb/scal/usr/local/bin/scal
           chmod +x deb/scal/usr/local/bin/scal
 
           cat >deb/scal/DEBIAN/control <<EOF
@@ -76,6 +80,7 @@ jobs:
       - name: Create .rpm
         if: matrix.goos == 'linux'
         run: |
+          BIN=scal-${{ matrix.goos }}-${{ matrix.goarch }}
           if [ "${{ matrix.goarch }}" = "amd64" ]; then
             ARCH=x86_64
           else
@@ -83,7 +88,7 @@ jobs:
           fi
 
           mkdir -p rpm/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-          cp artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }} rpm/BUILD/scal
+          cp artifacts/debug-${{ matrix.goos }}-${{ matrix.goarch }} rpm/BUILD/scal
 
           cat >rpm/SPECS/scal.spec <<EOF
           Name: scal
