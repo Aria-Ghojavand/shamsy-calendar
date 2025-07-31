@@ -64,28 +64,43 @@ jobs:
           dpkg-deb --build deb/scal
           mv deb/scal.deb artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.deb
 
-      - name: Create .rpm package
-        if: matrix.goos == 'linux'
-        run: |
-          mkdir -p rpm/BUILD rpm/RPMS rpm/SOURCES rpm/SPECS rpm/SRPMS
-          cp artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }} rpm/BUILD/scal
-          cat > rpm/SPECS/scal.spec <<EOF
-          Name: scal
-          Version: 1.0.0
-          Release: 1
-          Summary: Scal CLI tool
-          License: MIT
-          Packager: Aria (Amir) Ghojavand <ariaghojavand@gmail.com>
-          %description
-          Scal CLI tool
-          %files
-          /usr/local/bin/scal
-          %changelog
-          * $(date +"%a %b %d %Y") Aria Ghojavand <ariaghojavand@gmail.com> 1.0.0-1
-          - Initial release
-          EOF
-          rpmbuild --define "_topdir $(pwd)/rpm" -bb rpm/SPECS/scal.spec
-          find rpm/RPMS -name "*.rpm" -exec mv {} artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.rpm \;
+- name: Create .rpm package
+  if: matrix.goos == 'linux'
+  run: |
+    mkdir -p rpm/BUILD rpm/RPMS rpm/SOURCES rpm/SPECS rpm/SRPMS
+    cp artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }} rpm/BUILD/scal
+    # Map GitHub Actions goarch to RPM target architecture
+    if [ "${{ matrix.goarch }}" = "amd64" ]; then
+      target_arch="x86_64"
+    elif [ "${{ matrix.goarch }}" = "arm64" ]; then
+      target_arch="aarch64"
+    fi
+    # Create the spec file with %install section
+    cat > rpm/SPECS/scal.spec <<EOF
+    Name: scal
+    Version: 1.0.0
+    Release: 1
+    Summary: Scal CLI tool
+    License: MIT
+    Packager: Aria (Amir) Ghojavand <ariaghojavand@gmail.com>
+
+    %description
+    Scal CLI tool
+
+    %install
+    mkdir -p %{buildroot}/usr/local/bin
+    cp %{_builddir}/scal %{buildroot}/usr/local/bin/scal
+
+    %files
+    /usr/local/bin/scal
+
+    %changelog
+    * $(date +"%a %b %d %Y") Aria Ghojavand <ariaghojavand@gmail.com> 1.0.0-1
+    - Initial release
+    EOF
+    # Build the RPM with the correct target architecture
+    rpmbuild --define "_topdir $(pwd)/rpm" --target $target_arch -bb rpm/SPECS/scal.spec
+    find rpm/RPMS -name "*.rpm" -exec mv {} artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.rpm \;
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
