@@ -25,6 +25,9 @@ jobs:
         with:
           go-version: '1.24'
 
+      - name: Show Go env
+        run: go env
+
       - name: Download dependencies
         run: go mod download
 
@@ -36,6 +39,7 @@ jobs:
 
       - name: Build binary
         env:
+          # comment this out if your code needs cgo; otherwise pure-Go cross-build is easiest
           CGO_ENABLED: '0'
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -45,7 +49,8 @@ jobs:
           if [ "${{ matrix.goos }}" = "windows" ]; then
             BIN=$BIN.exe
           fi
-          go build -o artifacts/$BIN main.go
+          # <-- build the module, not just main.go
+          go build -o artifacts/$BIN .
 
       - name: Create .deb
         if: matrix.goos == 'linux'
