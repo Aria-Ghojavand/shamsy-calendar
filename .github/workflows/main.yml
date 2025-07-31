@@ -15,79 +15,61 @@ jobs:
       ARCH: amd64
 
     steps:
-    - uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v3
 
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.24.2'
+        go-version: '1.21'
 
-    # Build Linux binary (amd64)
     - name: Build Linux binary
-      run: |
-        GOOS=linux GOARCH=$ARCH go build -o $APP_NAME-linux
+      run: GOOS=linux GOARCH=${{ env.ARCH }} go build -o ${{ env.APP_NAME }}-linux
 
-    # Build Windows binary (.exe)
     - name: Build Windows binary
-      run: |
-        GOOS=windows GOARCH=$ARCH go build -o $APP_NAME.exe
+      run: GOOS=windows GOARCH=${{ env.ARCH }} go build -o ${{ env.APP_NAME }}.exe
 
-    # Build macOS binary
     - name: Build macOS binary
+      run: GOOS=darwin GOARCH=${{ env.ARCH }} go build -o ${{ env.APP_NAME }}-macos
+
+    - name: Install deb and rpm tools
+      run: sudo apt-get update && sudo apt-get install -y dpkg rpm
+
+    - name: Create .deb package
       run: |
-        GOOS=darwin GOARCH=$ARCH go build -o $APP_NAME-macos
+        mkdir -p ${{ env.APP_NAME }}_deb/usr/local/bin
+        cp ${{ env.APP_NAME }}-linux ${{ env.APP_NAME }}_deb/usr/local/bin/${{ env.APP_NAME }}
+        chmod 755 ${{ env.APP_NAME }}_deb/usr/local/bin/${{ env.APP_NAME }}
 
-    # Package .deb
-    - name: Install dpkg-deb
-      run: sudo apt-get update && sudo apt-get install -y dpkg
+        mkdir -p ${{ env.APP_NAME }}_deb/DEBIAN
+        echo "Package: ${{ env.APP_NAME }}" > ${{ env.APP_NAME }}_deb/DEBIAN/control
+        echo "Version: ${{ env.VERSION }}" >> ${{ env.APP_NAME }}_deb/DEBIAN/control
+        echo "Section: utils" >> ${{ env.APP_NAME }}_deb/DEBIAN/control
+        echo "Priority: optional" >> ${{ env.APP_NAME }}_deb/DEBIAN/control
+        echo "Architecture: ${{ env.ARCH }}" >> ${{ env.APP_NAME }}_deb/DEBIAN/control
+        echo "Maintainer: Your Name <you@example.com>" >> ${{ env.APP_NAME }}_deb/DEBIAN/control
+        echo "Description: ${{ env.APP_NAME }} - A Go CLI app" >> ${{ env.APP_NAME }}_deb/DEBIAN/control
 
-    - name: Prepare .deb package
-      run: |
-        mkdir -p ${APP_NAME}_deb/usr/local/bin
-        mv $APP_NAME-linux ${APP_NAME}_deb/usr/local/bin/$APP_NAME
-        chmod 755 ${APP_NAME}_deb/usr/local/bin/$APP_NAME
+        dpkg-deb --build ${{ env.APP_NAME }}_deb
 
-        mkdir -p ${APP_NAME}_deb/DEBIAN
-        cat > ${APP_NAME}_deb/DEBIAN/control <<EOF
-Package: ${APP_NAME}
-Version: ${VERSION}
-Section: utils
-Priority: optional
-Architecture: amd64
-Maintainer: Your Name <youremail@example.com>
-Description: ${APP_NAME} - A Go application packaged as .deb
-EOF
-
-    - name: Build .deb package
-      run: dpkg-deb --build ${APP_NAME}_deb
-
-    # Package .rpm
-    - name: Install rpm build tools
-      run: sudo apt-get install -y rpm
-
-    - name: Prepare RPM build environment
+    - name: Create .rpm package
       run: |
         mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-        mkdir -p scal-${VERSION}
-        mv $APP_NAME-linux scal-${VERSION}/
-        tar czvf scal-${VERSION}.tar.gz scal-${VERSION}
-        mv scal-${VERSION}.tar.gz ~/rpmbuild/SOURCES/
+        mkdir -p ${{ env.APP_NAME }}-${{ env.VERSION }}
+        cp ${{ env.APP_NAME }}-linux ${{ env.APP_NAME }}-${{ env.VERSION }}/
+        tar czf ${{ env.APP_NAME }}-${{ env.VERSION }}.tar.gz ${{ env.APP_NAME }}-${{ env.VERSION }}
+        mv ${{ env.APP_NAME }}-${{ env.VERSION }}.tar.gz ~/rpmbuild/SOURCES/
 
-        cat > ~/rpmbuild/SPECS/scal.spec <<EOF
+        cat << 'EOF' > ~/rpmbuild/SPECS/${{ env.APP_NAME }}.spec
 Name:           scal
-Version:        ${VERSION}
+Version:        1.0.0
 Release:        1%{?dist}
-Summary:        scal - A Go application packaged as RPM
-
+Summary:        scal - A Go CLI tool
 License:        MIT
-URL:            https://example.com/scal
-Source0:        %{name}-%{version}.tar.gz
+Source0:        scal-1.0.0.tar.gz
 
 BuildRequires:  golang
-Requires:       
-
-%description
-scal - A Go application packaged as RPM
+Requires:
 
 %prep
 %setup -q
@@ -103,40 +85,38 @@ install -m 0755 scal %{buildroot}/usr/local/bin/scal
 /usr/local/bin/scal
 
 %changelog
-* $(date +"%a %b %d %Y") Your Name <youremail@example.com> - ${VERSION}-1
-- Initial package
+* Wed Jul 31 2025 Aria(amir) Ghojavand - 1.0.0-1
+- Initial RPM build
 EOF
 
-    - name: Build RPM package
-      run: rpmbuild -ba ~/rpmbuild/SPECS/scal.spec
+        rpmbuild -ba ~/rpmbuild/SPECS/scal.spec
 
-    # Upload all artifacts
     - name: Upload Linux binary
       uses: actions/upload-artifact@v3
       with:
         name: scal-linux
-        path: $APP_NAME-linux
+        path: scal-linux
 
     - name: Upload Windows binary
       uses: actions/upload-artifact@v3
       with:
         name: scal-windows.exe
-        path: $APP_NAME.exe
+        path: scal.exe
 
     - name: Upload macOS binary
       uses: actions/upload-artifact@v3
       with:
         name: scal-macos
-        path: $APP_NAME-macos
+        path: scal-macos
 
-    - name: Upload .deb package
+    - name: Upload .deb
       uses: actions/upload-artifact@v3
       with:
         name: scal.deb
-        path: ${APP_NAME}_deb.deb
+        path: scal_deb.deb
 
-    - name: Upload .rpm package
+    - name: Upload .rpm
       uses: actions/upload-artifact@v3
       with:
         name: scal.rpm
-        path: ~/rpmbuild/RPMS/x86_64/scal-${VERSION}-1*.rpm
+        path: ~/rpmbuild/RPMS/x86_64/scal-1.0.0-1*.rpm
