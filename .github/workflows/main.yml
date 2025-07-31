@@ -1,12 +1,15 @@
-name: Build Scal CLI
+name: CI/CD
 
 on:
   push:
     branches:
-      - '*'
+      - main
+    tags:
+      - 'v*.*.*'
 
 jobs:
   build:
+    name: Build Scal CLI
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -17,16 +20,13 @@ jobs:
             goarch: arm64
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
 
-      - name: Download dependencies
-        run: go mod download
+      - run: go mod download
 
       - name: Install packaging deps
         if: matrix.goos == 'linux'
@@ -41,9 +41,7 @@ jobs:
         run: |
           mkdir -p artifacts
           BIN=scal-${{ matrix.goos }}-${{ matrix.goarch }}
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            BIN=$BIN.exe
-          fi
+          [ "${{ matrix.goos }}" = "windows" ] && BIN=$BIN.exe
           go build -o artifacts/$BIN .
 
       - name: Create .deb
@@ -53,7 +51,6 @@ jobs:
           mkdir -p deb/scal/usr/local/bin deb/scal/DEBIAN
           cp artifacts/$BIN deb/scal/usr/local/bin/scal
           chmod +x deb/scal/usr/local/bin/scal
-
           cat >deb/scal/DEBIAN/control <<EOF
           Package: scal
           Version: 1.0.0
@@ -64,25 +61,17 @@ jobs:
           Description: Scal CLI tool
           Homepage: https://github.com/ariaghojavand/scal
           EOF
-
           dpkg-deb --build deb/scal
           mv deb/scal.deb artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.deb
 
-      - name: Create .rpm
+      - name: Create .rpm (x86_64 only)
         if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
         run: |
           ARCH=x86_64
           BIN=scal-linux-amd64
-
-          mkdir -p rpm/BUILD \
-                   rpm/RPMS/$ARCH \
-                   rpm/SOURCES \
-                   rpm/SPECS \
-                   rpm/SRPMS
-
+          mkdir -p rpm/BUILD rpm/RPMS/$ARCH rpm/SOURCES rpm/SPECS rpm/SRPMS
           cp artifacts/$BIN rpm/BUILD/scal
           chmod +x rpm/BUILD/scal
-
           cat >rpm/SPECS/scal.spec <<EOF
           Name: scal
           Version: 1.0.0
@@ -106,41 +95,35 @@ jobs:
           * $(date +"%a %b %d %Y") Aria Ghojavand <ariaghojavand@gmail.com> 1.0.0-1
           - Initial release
           EOF
+          rpmbuild --define "_topdir $(pwd)/rpm" --target "$ARCH" -bb rpm/SPECS/scal.spec
+          mv rpm/RPMS/$ARCH/scal-1.0.0-1.$ARCH.rpm artifacts/scal-linux-amd64.rpm
 
-          rpmbuild --define "_topdir $(pwd)/rpm" \
-                   --target "$ARCH" \
-                   -bb rpm/SPECS/scal.spec
-
-          mv rpm/RPMS/$ARCH/scal-1.0.0-1.$ARCH.rpm \
-             artifacts/scal-linux-amd64.rpm
-
-      - name: Upload artifacts
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: scal-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: scal-artifacts
           path: artifacts/*
 
   release:
     name: Publish Release
     needs: build
     runs-on: ubuntu-latest
+    # only run this job when the ref is a tag like v1.2.3
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           name: scal-artifacts
 
-      - name: Create GitHub Release
-        id: gh_release
+      - id: create_release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
           name: Scal CLI ${{ github.ref_name }}
           body: |
-            ## What’s Changed
-            - Automated release for tag ${{ github.ref_name }}
-          draft: false
-          prerelease: false
+            ## Changelog
+            - Automated release for ${{ github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -148,12 +131,6 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          files: |
-            *.deb
-            *.rpm
-            *.exe
-            scal-*-darwin-*
-            scal-*-linux-*
-            scal-*-windows-*
+          files: artifacts/*        
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
