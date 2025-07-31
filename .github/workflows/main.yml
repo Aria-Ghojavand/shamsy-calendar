@@ -1,12 +1,16 @@
-name: Build Scal CLI
+name: Build & Release Scal CLI
 
-
+# 1) Listen for ANY push to any branch or tag
 on:
   push:
     branches:
-      - '*'
+      - '*'           # build on all branch pushes
     tags:
-      - 'v*.*.*'
+      - 'v*.*.*'      # also build+release on tag pushes
+
+# 2) Allow writing Releases
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -112,25 +116,29 @@ jobs:
           name: scal-${{ matrix.goos }}-${{ matrix.goarch }}
           path: artifacts/*
 
-      # —————————————————————————————————————————————————————————————
-      # Publish a Release only when this run was triggered by a semver tag
+    # ———————————————————————————————————————————————————————
+    # 3) Only on a tag like v1.2.3, create the Release…
+      - name: Debug GITHUB_REF
+        if: startsWith(github.ref, 'refs/tags/')
+        run: echo "This run was triggered by $GITHUB_REF"
+
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v1
+        uses: actions/create-release@v1
         with:
           tag_name: ${{ github.ref_name }}
           name: Scal CLI ${{ github.ref_name }}
           body: |
-            ## Release ${{ github.ref_name }}
-            Automagically published via CI/CD workflow.
+            ## What's Changed
+            - Automated release for ${{ github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Release Assets
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v1
+        uses: actions/upload-release-asset@v1
         with:
-          tag_name: ${{ github.ref_name }}
-          files: artifacts/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          upload_url: ${{ steps.Create_GitHub_Release.outputs.upload_url }}
+          asset_path: artifacts/*
+          asset_name: "${{ github.ref_name }}-artifacts.zip"
+          asset_content_type: application/zip
