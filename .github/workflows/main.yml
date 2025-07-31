@@ -1,0 +1,142 @@
+name: Build and Package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      APP_NAME: scal
+      VERSION: 1.0.0
+      ARCH: amd64
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.24.2'
+
+    # Build Linux binary (amd64)
+    - name: Build Linux binary
+      run: |
+        GOOS=linux GOARCH=$ARCH go build -o $APP_NAME-linux
+
+    # Build Windows binary (.exe)
+    - name: Build Windows binary
+      run: |
+        GOOS=windows GOARCH=$ARCH go build -o $APP_NAME.exe
+
+    # Build macOS binary
+    - name: Build macOS binary
+      run: |
+        GOOS=darwin GOARCH=$ARCH go build -o $APP_NAME-macos
+
+    # Package .deb
+    - name: Install dpkg-deb
+      run: sudo apt-get update && sudo apt-get install -y dpkg
+
+    - name: Prepare .deb package
+      run: |
+        mkdir -p ${APP_NAME}_deb/usr/local/bin
+        mv $APP_NAME-linux ${APP_NAME}_deb/usr/local/bin/$APP_NAME
+        chmod 755 ${APP_NAME}_deb/usr/local/bin/$APP_NAME
+
+        mkdir -p ${APP_NAME}_deb/DEBIAN
+        cat > ${APP_NAME}_deb/DEBIAN/control <<EOF
+Package: ${APP_NAME}
+Version: ${VERSION}
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Your Name <youremail@example.com>
+Description: ${APP_NAME} - A Go application packaged as .deb
+EOF
+
+    - name: Build .deb package
+      run: dpkg-deb --build ${APP_NAME}_deb
+
+    # Package .rpm
+    - name: Install rpm build tools
+      run: sudo apt-get install -y rpm
+
+    - name: Prepare RPM build environment
+      run: |
+        mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+        mkdir -p scal-${VERSION}
+        mv $APP_NAME-linux scal-${VERSION}/
+        tar czvf scal-${VERSION}.tar.gz scal-${VERSION}
+        mv scal-${VERSION}.tar.gz ~/rpmbuild/SOURCES/
+
+        cat > ~/rpmbuild/SPECS/scal.spec <<EOF
+Name:           scal
+Version:        ${VERSION}
+Release:        1%{?dist}
+Summary:        scal - A Go application packaged as RPM
+
+License:        MIT
+URL:            https://example.com/scal
+Source0:        %{name}-%{version}.tar.gz
+
+BuildRequires:  golang
+Requires:       
+
+%description
+scal - A Go application packaged as RPM
+
+%prep
+%setup -q
+
+%build
+GOOS=linux GOARCH=amd64 go build -o scal
+
+%install
+mkdir -p %{buildroot}/usr/local/bin
+install -m 0755 scal %{buildroot}/usr/local/bin/scal
+
+%files
+/usr/local/bin/scal
+
+%changelog
+* $(date +"%a %b %d %Y") Your Name <youremail@example.com> - ${VERSION}-1
+- Initial package
+EOF
+
+    - name: Build RPM package
+      run: rpmbuild -ba ~/rpmbuild/SPECS/scal.spec
+
+    # Upload all artifacts
+    - name: Upload Linux binary
+      uses: actions/upload-artifact@v3
+      with:
+        name: scal-linux
+        path: $APP_NAME-linux
+
+    - name: Upload Windows binary
+      uses: actions/upload-artifact@v3
+      with:
+        name: scal-windows.exe
+        path: $APP_NAME.exe
+
+    - name: Upload macOS binary
+      uses: actions/upload-artifact@v3
+      with:
+        name: scal-macos
+        path: $APP_NAME-macos
+
+    - name: Upload .deb package
+      uses: actions/upload-artifact@v3
+      with:
+        name: scal.deb
+        path: ${APP_NAME}_deb.deb
+
+    - name: Upload .rpm package
+      uses: actions/upload-artifact@v3
+      with:
+        name: scal.rpm
+        path: ~/rpmbuild/RPMS/x86_64/scal-${VERSION}-1*.rpm
