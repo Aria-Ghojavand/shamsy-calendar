@@ -51,14 +51,16 @@ jobs:
           mkdir -p deb/scal/usr/local/bin
           cp artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }} deb/scal/usr/local/bin/scal
           mkdir -p deb/scal/DEBIAN
-          echo "Package: scal
-Version: 1.0.0
-Section: utils
-Priority: optional
-Architecture: ${{ matrix.goarch }}
-Maintainer: Aria (Amir) Ghojavand <ariaghojavand@gmail.com>
-Description: Scal CLI tool
-Homepage: https://github.com/Amir-Ghojavand/scal" > deb/scal/DEBIAN/control
+          cat > deb/scal/DEBIAN/control <<EOF
+          Package: scal
+          Version: 1.0.0
+          Section: utils
+          Priority: optional
+          Architecture: ${{ matrix.goarch }}
+          Maintainer: Aria (Amir) Ghojavand <ariaghojavand@gmail.com>
+          Description: Scal CLI tool
+          Homepage: https://github.com/ariaghojavand/scal
+          EOF
           dpkg-deb --build deb/scal
           mv deb/scal.deb artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.deb
 
@@ -67,19 +69,21 @@ Homepage: https://github.com/Amir-Ghojavand/scal" > deb/scal/DEBIAN/control
         run: |
           mkdir -p rpm/BUILD rpm/RPMS rpm/SOURCES rpm/SPECS rpm/SRPMS
           cp artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }} rpm/BUILD/scal
-          echo "Name: scal
-Version: 1.0.0
-Release: 1
-Summary: Scal CLI tool
-License: MIT
-Packager: Aria (Amir) Ghojavand <ariaghojavand@gmail.com>
-%description
-Scal CLI tool
-%files
-/usr/local/bin/scal
-%changelog
-* $(date +"%a %b %d %Y") Aria Ghojavand <ariaghojavand@gmail.com> 1.0.0-1
-- Initial release" > rpm/SPECS/scal.spec
+          cat > rpm/SPECS/scal.spec <<EOF
+          Name: scal
+          Version: 1.0.0
+          Release: 1
+          Summary: Scal CLI tool
+          License: MIT
+          Packager: Aria (Amir) Ghojavand <ariaghojavand@gmail.com>
+          %description
+          Scal CLI tool
+          %files
+          /usr/local/bin/scal
+          %changelog
+          * $(date +"%a %b %d %Y") Aria Ghojavand <ariaghojavand@gmail.com> 1.0.0-1
+          - Initial release
+          EOF
           rpmbuild --define "_topdir $(pwd)/rpm" -bb rpm/SPECS/scal.spec
           find rpm/RPMS -name "*.rpm" -exec mv {} artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.rpm \;
 
