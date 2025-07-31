@@ -1,9 +1,9 @@
-name: Build Scal CLI
+name: Build & Release Scal CLI
 
 on:
   push:
     branches:
-      - main
+      - '*'
     tags:
       - 'v*.*.*'
 
@@ -35,6 +35,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y rpm dpkg-dev
+
       - name: Build binary
         env:
           GOOS: ${{ matrix.goos }}
@@ -46,6 +47,7 @@ jobs:
             BIN=$BIN.exe
           fi
           go build -o artifacts/$BIN .
+
       - name: Create .deb
         if: matrix.goos == 'linux'
         run: |
@@ -53,6 +55,7 @@ jobs:
           mkdir -p deb/scal/usr/local/bin deb/scal/DEBIAN
           cp artifacts/$BIN deb/scal/usr/local/bin/scal
           chmod +x deb/scal/usr/local/bin/scal
+
           cat >deb/scal/DEBIAN/control <<EOF
           Package: scal
           Version: 1.0.0
@@ -63,20 +66,25 @@ jobs:
           Description: Scal CLI tool
           Homepage: https://github.com/ariaghojavand/scal
           EOF
+
           dpkg-deb --build deb/scal
           mv deb/scal.deb artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.deb
-      - name: Create .rpm
+
+      - name: Create .rpm (x86_64 only)
         if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
         run: |
           ARCH=x86_64
           BIN=scal-linux-amd64
+
           mkdir -p rpm/BUILD \
                    rpm/RPMS/$ARCH \
                    rpm/SOURCES \
                    rpm/SPECS \
                    rpm/SRPMS
+
           cp artifacts/$BIN rpm/BUILD/scal
           chmod +x rpm/BUILD/scal
+
           cat >rpm/SPECS/scal.spec <<EOF
           Name: scal
           Version: 1.0.0
@@ -100,46 +108,39 @@ jobs:
           * $(date +"%a %b %d %Y") Aria Ghojavand <ariaghojavand@gmail.com> 1.0.0-1
           - Initial release
           EOF
+
           rpmbuild --define "_topdir $(pwd)/rpm" \
                    --target "$ARCH" \
                    -bb rpm/SPECS/scal.spec
+
           mv rpm/RPMS/$ARCH/scal-1.0.0-1.$ARCH.rpm \
              artifacts/scal-linux-amd64.rpm
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: scal-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: scal-${{ github.ref_name || github.sha }}
           path: artifacts/*
 
-          
-  release:
-    name: Publish Release
-    needs: build
-    runs-on: ubuntu-latest
-    # only run this job when the ref is a tag like v1.2.3
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: scal-artifacts
-
-      - id: create_release
+      # —————————————————————————————————————————————————————————————
+      # Publish a Release only when this run was triggered by a semver tag
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
           name: Scal CLI ${{ github.ref_name }}
           body: |
-            ## Changelog
-            - Automated release for ${{ github.ref_name }}
+            ## Release ${{ github.ref_name }}
+            Automagically published via CI/CD workflow.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Release Assets
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          files: artifacts/*        
+          files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
