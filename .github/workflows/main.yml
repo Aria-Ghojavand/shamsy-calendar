@@ -3,11 +3,10 @@ name: Build Scal CLI
 on:
   push:
     branches:
-      - '**'
+      - '*'
 
 jobs:
   build:
-    name: Build Scal CLI
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -18,15 +17,12 @@ jobs:
             goarch: arm64
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
 
-      - name: Install dependencies for packaging
+      - name: Install packaging deps
         if: matrix.goos == 'linux'
         run: |
           sudo apt-get update
@@ -38,69 +34,74 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           output="scal-${{ matrix.goos }}-${{ matrix.goarch }}"
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            output="${output}.exe"
-          fi
+          [ "${{ matrix.goos }}" = "windows" ] && output="${output}.exe"
           go build -o $output main.go
           mkdir -p artifacts
           mv $output artifacts/
 
-      - name: Create .deb package
+      - name: Create .deb
         if: matrix.goos == 'linux'
         run: |
           mkdir -p deb/scal/usr/local/bin
           cp artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }} deb/scal/usr/local/bin/scal
-          mkdir -p deb/scal/DEBIAN
-          cat > deb/scal/DEBIAN/control <<EOF
-          Package: scal
-          Version: 1.0.0
-          Section: utils
-          Priority: optional
-          Architecture: ${{ matrix.goarch }}
-          Maintainer: Aria (Amir) Ghojavand <ariaghojavand@gmail.com>
-          Description: Scal CLI tool
-          Homepage: https://github.com/ariaghojavand/scal
-          EOF
-          dpkg-deb --build deb/scal
-          mv deb/scal.deb artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.deb
+          chmod +x deb/scal/usr/local/bin/scal
 
-      - name: Create .rpm package
+          mkdir -p deb/scal/DEBIAN
+          # <-- no spaces before "Package:" etc.
+          cat > deb/scal/DEBIAN/control <<EOF
+Package: scal
+Version: 1.0.0
+Section: utils
+Priority: optional
+Architecture: ${{ matrix.goarch }}
+Maintainer: Aria (Amir) Ghojavand <ariaghojavand@gmail.com>
+Description: Scal CLI tool
+Homepage: https://github.com/ariaghojavand/scal
+EOF
+
+          dpkg-deb --build deb/scal scal-${{ matrix.goos }}-${{ matrix.goarch }}.deb
+          mv scal-${{ matrix.goos }}-${{ matrix.goarch }}.deb artifacts/
+
+      - name: Create .rpm
         if: matrix.goos == 'linux'
         run: |
-          mkdir -p rpm/BUILD rpm/RPMS rpm/SOURCES rpm/SPECS rpm/SRPMS
-          cp artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }} rpm/BUILD/scal
           if [ "${{ matrix.goarch }}" = "amd64" ]; then
             target_arch="x86_64"
-          elif [ "${{ matrix.goarch }}" = "arm64" ]; then
+          else
             target_arch="aarch64"
           fi
+
+          mkdir -p rpm/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          cp artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }} rpm/BUILD/scal
+
           cat > rpm/SPECS/scal.spec <<EOF
-          Name: scal
-          Version: 1.0.0
-          Release: 1
-          Summary: Scal CLI tool
-          License: MIT
-          Packager: Aria (Amir) Ghojavand <ariaghojavand@gmail.com>
+Name: scal
+Version: 1.0.0
+Release: 1
+Summary: Scal CLI tool
+License: MIT
+Packager: Aria Ghojavand <ariaghojavand@gmail.com>
+BuildArch: $target_arch
 
-          %description
-          Scal CLI tool
+%description
+Scal CLI tool
 
-          %install
-          mkdir -p %{buildroot}/usr/local/bin
-          cp %{_builddir}/scal %{buildroot}/usr/local/bin/scal
+%install
+mkdir -p %{buildroot}/usr/local/bin
+install -m 0755 %{_topdir}/BUILD/scal %{buildroot}/usr/local/bin/scal
 
-          %files
-          /usr/local/bin/scal
+%files
+/usr/local/bin/scal
 
-          %changelog
-          * $(date +"%a %b %d %Y") Aria Ghojavand <ariaghojavand@gmail.com> 1.0.0-1
-          - Initial release
-          EOF
+%changelog
+* $(date +"%a %b %d %Y") Aria Ghojavand <ariaghojavand@gmail.com> 1.0.0-1
+- Initial release
+EOF
+
           rpmbuild --define "_topdir $(pwd)/rpm" --target $target_arch -bb rpm/SPECS/scal.spec
-          find rpm/RPMS -name "*.rpm" -exec mv {} artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.rpm \;
+          find rpm/RPMS -name '*.rpm' -exec mv {} artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.rpm \;
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: scal-${{ matrix.goos }}-${{ matrix.goarch }}
           path: artifacts/*
