@@ -84,7 +84,7 @@ jobs:
           if [ "${{ matrix.goarch }}" = "amd64" ]; then
             ARCH=x86_64
           else
-            ARCH=aarch64
+            ARCH=arm64
           fi
 
           mkdir -p rpm/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
