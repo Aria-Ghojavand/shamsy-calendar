@@ -1,4 +1,3 @@
-```yaml
 name: Build Scal CLI
 
 on:
@@ -89,4 +88,3 @@ Scal CLI tool
         with:
           name: scal-${{ matrix.goos }}-${{ matrix.goarch }}
           path: artifacts/*
-```
