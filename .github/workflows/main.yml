@@ -10,11 +10,12 @@ on:
 
 env:
   GO_VERSION: '1.21'
-  APP_NAME: 'shamsy-calendar'  # Change this to your app name
+  APP_NAME: 'shamsy-calendar'
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v4
     
@@ -23,67 +24,44 @@ jobs:
       with:
         go-version: ${{ env.GO_VERSION }}
     
-    - name: Cache Go modules
-      uses: actions/cache@v4
-      with:
-        path: ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
+    - name: Download dependencies
+      run: go mod download
+    
+    - name: Run go vet
+      run: go vet ./...
+    
+    - name: Run tests
+      run: go test -v ./...
 
-  build:
+  build-binaries:
     needs: test
+    if: startsWith(github.ref, 'refs/tags/')
+    timeout-minutes: 20
     strategy:
+      fail-fast: false
       matrix:
         include:
-          # Linux builds
+          # Core platforms
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
             suffix: linux-amd64
-            build_deb: true
-            build_rpm: true
           - os: ubuntu-latest
             goos: linux
             goarch: arm64
             suffix: linux-arm64
-            build_deb: true
-            build_rpm: true
-          - os: ubuntu-latest
-            goos: linux
-            goarch: 386
-            suffix: linux-386
-            build_deb: true
-            build_rpm: true
-          
-          # Windows builds
           - os: windows-latest
             goos: windows
             goarch: amd64
             suffix: windows-amd64.exe
-            build_exe: true
-          - os: windows-latest
-            goos: windows
-            goarch: 386
-            suffix: windows-386.exe
-            build_exe: true
-          - os: windows-latest
-            goos: windows
-            goarch: arm64
-            suffix: windows-arm64.exe
-            build_exe: true
-          
-          # macOS builds
           - os: macos-latest
             goos: darwin
             goarch: amd64
             suffix: darwin-amd64
-            build_dmg: true
           - os: macos-latest
             goos: darwin
             goarch: arm64
             suffix: darwin-arm64
-            build_dmg: true
     
     runs-on: ${{ matrix.os }}
     
@@ -100,11 +78,7 @@ jobs:
     - name: Get version
       id: version
       run: |
-        if [[ "${{ runner.os }}" == "Windows" ]]; then
-          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-        else
-          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-        fi
+        echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
       shell: bash
     
     - name: Build binary
@@ -114,59 +88,80 @@ jobs:
         CGO_ENABLED: 0
       run: |
         mkdir -p dist
-        if [[ "${{ matrix.goos }}" == "windows" ]]; then
-          go build -ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}" -o dist/${{ env.APP_NAME }}-${{ matrix.suffix }} .
-        else
-          go build -ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}" -o dist/${{ env.APP_NAME }}-${{ matrix.suffix }} .
-        fi
+        go build -ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}" -o dist/${{ env.APP_NAME }}-${{ matrix.suffix }} .
       shell: bash
     
-    # Linux package builds
-    - name: Install packaging tools (Linux)
-      if: matrix.build_deb || matrix.build_rpm
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: binary-${{ matrix.suffix }}
+        path: dist/${{ env.APP_NAME }}-${{ matrix.suffix }}
+        retention-days: 5
+
+  build-packages:
+    needs: build-binaries
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download Linux binary
+      uses: actions/download-artifact@v4
+      with:
+        name: binary-linux-${{ matrix.arch }}
+        path: dist/
+    
+    - name: Get version
+      id: version
+      run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+    
+    - name: Install packaging tools
       run: |
-        sudo apt-get update
-        sudo apt-get install -y dpkg-dev rpm build-essential
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends dpkg-dev rpm
     
     - name: Create DEB package
-      if: matrix.build_deb
       run: |
-        mkdir -p packaging/deb/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.goarch }}/DEBIAN
-        mkdir -p packaging/deb/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.goarch }}/usr/bin
-        mkdir -p packaging/deb/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.goarch }}/usr/share/doc/${{ env.APP_NAME }}
+        VERSION="${{ steps.version.outputs.version }}"
+        ARCH="${{ matrix.arch }}"
+        
+        # Create package structure
+        mkdir -p packaging/deb/${{ env.APP_NAME }}-${VERSION}-${ARCH}/DEBIAN
+        mkdir -p packaging/deb/${{ env.APP_NAME }}-${VERSION}-${ARCH}/usr/bin
+        mkdir -p packaging/deb/${{ env.APP_NAME }}-${VERSION}-${ARCH}/usr/share/doc/${{ env.APP_NAME }}
         
         # Copy binary
-        cp dist/${{ env.APP_NAME }}-${{ matrix.suffix }} packaging/deb/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.goarch }}/usr/bin/${{ env.APP_NAME }}
-        chmod +x packaging/deb/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.goarch }}/usr/bin/${{ env.APP_NAME }}
+        cp dist/${{ env.APP_NAME }}-linux-${ARCH} packaging/deb/${{ env.APP_NAME }}-${VERSION}-${ARCH}/usr/bin/${{ env.APP_NAME }}
+        chmod +x packaging/deb/${{ env.APP_NAME }}-${VERSION}-${ARCH}/usr/bin/${{ env.APP_NAME }}
         
         # Create control file
-        cat > packaging/deb/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.goarch }}/DEBIAN/control << EOF
+        cat > packaging/deb/${{ env.APP_NAME }}-${VERSION}-${ARCH}/DEBIAN/control << EOF
         Package: ${{ env.APP_NAME }}
-        Version: ${{ steps.version.outputs.version }}
+        Version: ${VERSION#v}
         Section: utils
         Priority: optional
-        Architecture: ${{ matrix.goarch }}
-        Maintainer: Your Name <your.email@example.com>
-        Description: Your Go Application
-         A description of your Go application.
-        EOF
-        
-        # Create changelog
-        cat > packaging/deb/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.goarch }}/usr/share/doc/${{ env.APP_NAME }}/changelog << EOF
-        ${{ env.APP_NAME }} (${{ steps.version.outputs.version }}) unstable; urgency=medium
-        
-          * Release ${{ steps.version.outputs.version }}
-        
-         -- Your Name <your.email@example.com>  $(date -R)
+        Architecture: ${ARCH}
+        Maintainer: Shamsy Calendar <shamsy@example.com>
+        Description: Persian (Shamsy) Calendar CLI Tool
+         A command-line Persian calendar application that displays Shamsy dates
+         with holiday information and supports various output formats.
         EOF
         
         # Build DEB
-        dpkg-deb --build packaging/deb/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.goarch }}
-        mv packaging/deb/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.goarch }}.deb dist/
+        dpkg-deb --build packaging/deb/${{ env.APP_NAME }}-${VERSION}-${ARCH}
+        mv packaging/deb/${{ env.APP_NAME }}-${VERSION}-${ARCH}.deb dist/
     
     - name: Create RPM package
-      if: matrix.build_rpm
       run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        ARCH="${{ matrix.arch }}"
+        
         mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
         
         # Create spec file
@@ -174,16 +169,14 @@ jobs:
         Name:           ${{ env.APP_NAME }}
         Version:        ${VERSION#v}
         Release:        1%{?dist}
-        Summary:        Your Go Application
+        Summary:        Persian (Shamsy) Calendar CLI Tool
         
         License:        MIT
         URL:            https://github.com/${{ github.repository }}
-        Source0:        %{name}-%{version}.tar.gz
-        
-        BuildRequires:  golang >= 1.19
         
         %description
-        A description of your Go application.
+        A command-line Persian calendar application that displays Shamsy dates
+        with holiday information and supports various output formats.
         
         %prep
         
@@ -191,59 +184,33 @@ jobs:
         
         %install
         mkdir -p %{buildroot}/usr/bin
-        cp ${{ github.workspace }}/dist/${{ env.APP_NAME }}-${{ matrix.suffix }} %{buildroot}/usr/bin/${{ env.APP_NAME }}
+        cp ${{ github.workspace }}/dist/${{ env.APP_NAME }}-linux-${ARCH} %{buildroot}/usr/bin/${{ env.APP_NAME }}
         
         %files
         /usr/bin/${{ env.APP_NAME }}
         
         %changelog
-        * $(date "+%a %b %d %Y") Your Name <your.email@example.com> - ${VERSION#v}-1
-        - Release ${{ steps.version.outputs.version }}
+        * $(date "+%a %b %d %Y") Shamsy Calendar <shamsy@example.com> - ${VERSION#v}-1
+        - Release ${VERSION}
         EOF
         
         # Build RPM
         VERSION=${{ steps.version.outputs.version }} rpmbuild -bb ~/rpmbuild/SPECS/${{ env.APP_NAME }}.spec
         find ~/rpmbuild/RPMS -name "*.rpm" -exec cp {} dist/ \;
     
-    # Windows MSI/EXE installer
-    - name: Create Windows installer
-      if: matrix.build_exe && matrix.goarch == 'amd64'
-      run: |
-        # Create a simple batch installer
-        cat > dist/install-${{ env.APP_NAME }}-${{ matrix.suffix }}.bat << 'EOF'
-        @echo off
-        echo Installing ${{ env.APP_NAME }}...
-        if not exist "C:\Program Files\${{ env.APP_NAME }}" mkdir "C:\Program Files\${{ env.APP_NAME }}"
-        copy "%~dp0${{ env.APP_NAME }}-${{ matrix.suffix }}" "C:\Program Files\${{ env.APP_NAME }}\${{ env.APP_NAME }}.exe"
-        echo Installation complete!
-        pause
-        EOF
-      shell: bash
-    
-    # macOS DMG creation
-    - name: Create macOS DMG
-      if: matrix.build_dmg
-      run: |
-        mkdir -p dist/dmg
-        cp dist/${{ env.APP_NAME }}-${{ matrix.suffix }} dist/dmg/${{ env.APP_NAME }}
-        
-        # Create a simple DMG
-        hdiutil create -volname "${{ env.APP_NAME }}" -srcfolder dist/dmg -ov -format UDZO dist/${{ env.APP_NAME }}-${{ matrix.suffix }}.dmg
-    
-    - name: Upload artifacts
+    - name: Upload packages
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.APP_NAME }}-${{ matrix.suffix }}
+        name: packages-${{ matrix.arch }}
         path: |
-          dist/${{ env.APP_NAME }}-${{ matrix.suffix }}*
           dist/*.deb
           dist/*.rpm
-          dist/*.dmg
-          dist/install-*.bat
+        retention-days: 5
 
   release:
-    needs: build
+    needs: [build-binaries, build-packages]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: startsWith(github.ref, 'refs/tags/')
     
     steps:
@@ -255,135 +222,69 @@ jobs:
       uses: actions/download-artifact@v4
       with:
         path: artifacts
+        merge-multiple: true
     
     - name: Organize artifacts
       run: |
         mkdir -p release
-        find artifacts -type f \( -name "${{ env.APP_NAME }}-*" -o -name "*.deb" -o -name "*.rpm" -o -name "*.dmg" -o -name "install-*.bat" \) -exec cp {} release/ \;
+        find artifacts -type f \( -name "${{ env.APP_NAME }}-*" -o -name "*.deb" -o -name "*.rpm" \) -exec cp {} release/ \;
         ls -la release/
     
     - name: Generate release notes
       id: release_notes
       run: |
-        # Get the tag name
         TAG_NAME=${GITHUB_REF#refs/tags/}
-        
-        # Get previous tag
         PREV_TAG=$(git describe --abbrev=0 --tags $TAG_NAME^ 2>/dev/null || echo "")
         
-        # Generate changelog
-        echo "## Release $TAG_NAME" > release_notes.md
-        echo "" >> release_notes.md
-        echo "### Changes" >> release_notes.md
+        cat > release_notes.md << EOF
+        ## 🎉 Shamsy Calendar $TAG_NAME
+        
+        Persian (Solar Hijri) calendar CLI tool with holiday support.
+        
+        ### 📥 Downloads
+        
+        #### Linux
+        - **DEB packages**: \`sudo dpkg -i shamsy-calendar-*.deb\`
+        - **RPM packages**: \`sudo rpm -i shamsy-calendar-*.rpm\`
+        - **Binary**: \`chmod +x shamsy-calendar-linux-* && sudo mv shamsy-calendar-linux-* /usr/local/bin/shamsy-calendar\`
+        
+        #### Windows
+        - **EXE**: Download and run \`shamsy-calendar-windows-amd64.exe\`
+        
+        #### macOS
+        - **Binary**: \`chmod +x shamsy-calendar-darwin-* && sudo mv shamsy-calendar-darwin-* /usr/local/bin/shamsy-calendar\`
+        
+        ### 🚀 Usage
+        
+        \`\`\`bash
+        # Show current month
+        shamsy-calendar
+        
+        # Show specific year
+        shamsy-calendar 1403
+        
+        # Show specific month with holidays
+        shamsy-calendar 1403 6 --show-holidays
+        \`\`\`
+        
+        ### 📋 Changes
+        EOF
         
         if [ -n "$PREV_TAG" ]; then
-          echo "Changes since $PREV_TAG:" >> release_notes.md
           echo "" >> release_notes.md
-          git log --pretty=format:"- %s (%an)" $PREV_TAG..$TAG_NAME >> release_notes.md
+          git log --pretty=format:"- %s" $PREV_TAG..$TAG_NAME >> release_notes.md
         else
-          echo "Initial release" >> release_notes.md
+          echo "- Initial release" >> release_notes.md
         fi
-        
-        echo "" >> release_notes.md
-        echo "### Downloads" >> release_notes.md
-        echo "" >> release_notes.md
-        echo "#### Linux" >> release_notes.md
-        echo "- **DEB packages**: For Debian/Ubuntu systems" >> release_notes.md
-        echo "- **RPM packages**: For Red Hat/CentOS/Fedora systems" >> release_notes.md
-        echo "- **Binary releases**: Standalone executables" >> release_notes.md
-        echo "" >> release_notes.md
-        echo "#### Windows" >> release_notes.md
-        echo "- **EXE files**: Standalone executables" >> release_notes.md
-        echo "- **Installer scripts**: Batch files for easy installation" >> release_notes.md
-        echo "" >> release_notes.md
-        echo "#### macOS" >> release_notes.md
-        echo "- **DMG files**: Disk images for easy installation" >> release_notes.md
-        echo "- **Binary releases**: Standalone executables" >> release_notes.md
-        echo "" >> release_notes.md
-        echo "### Supported Architectures" >> release_notes.md
-        echo "- **amd64**: 64-bit Intel/AMD processors" >> release_notes.md
-        echo "- **arm64**: 64-bit ARM processors (Apple Silicon, ARM servers)" >> release_notes.md
-        echo "- **386**: 32-bit Intel processors" >> release_notes.md
-        echo "" >> release_notes.md
-        echo "### Installation Instructions" >> release_notes.md
-        echo "" >> release_notes.md
-        echo "#### Linux (DEB)" >> release_notes.md
-        echo '```bash' >> release_notes.md
-        echo "sudo dpkg -i ${{ env.APP_NAME }}-*.deb" >> release_notes.md
-        echo '```' >> release_notes.md
-        echo "" >> release_notes.md
-        echo "#### Linux (RPM)" >> release_notes.md
-        echo '```bash' >> release_notes.md
-        echo "sudo rpm -i ${{ env.APP_NAME }}-*.rpm" >> release_notes.md
-        echo '```' >> release_notes.md
-        echo "" >> release_notes.md
-        echo "#### Binary Installation" >> release_notes.md
-        echo '```bash' >> release_notes.md
-        echo "# Download the appropriate binary for your system" >> release_notes.md
-        echo "chmod +x ${{ env.APP_NAME }}-*" >> release_notes.md
-        echo "sudo mv ${{ env.APP_NAME }}-* /usr/local/bin/${{ env.APP_NAME }}" >> release_notes.md
-        echo '```' >> release_notes.md
         
         cat release_notes.md
     
     - name: Create Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         files: release/*
         body_path: release_notes.md
         draft: false
         prerelease: false
-        generate_release_notes: false
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # Optional: Build for additional architectures
-  build-arch:
-    needs: test
-    if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - goos: linux
-            goarch: mips64le
-            suffix: linux-mips64le
-          - goos: linux
-            goarch: ppc64le
-            suffix: linux-ppc64le
-          - goos: linux
-            goarch: s390x
-            suffix: linux-s390x
-          - goos: freebsd
-            goarch: amd64
-            suffix: freebsd-amd64
-          - goos: openbsd
-            goarch: amd64
-            suffix: openbsd-amd64
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: ${{ env.GO_VERSION }}
-    
-    - name: Get version
-      id: version
-      run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-    
-    - name: Build binary
-      env:
-        GOOS: ${{ matrix.goos }}
-        GOARCH: ${{ matrix.goarch }}
-        CGO_ENABLED: 0
-      run: |
-        mkdir -p dist
-        go build -ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}" -o dist/${{ env.APP_NAME }}-${{ matrix.suffix }} .
-    
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ env.APP_NAME }}-${{ matrix.suffix }}
-        path: dist/${{ env.APP_NAME }}-${{ matrix.suffix }}
