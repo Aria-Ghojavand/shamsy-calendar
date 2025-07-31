@@ -1,9 +1,10 @@
+```yaml
 name: Build Scal CLI
 
 on:
   push:
     branches:
-      - 'main'
+      - '**'
 
 jobs:
   build:
@@ -58,7 +59,7 @@ Priority: optional
 Architecture: ${{ matrix.goarch }}
 Maintainer: Aria (Amir) Ghojavand <ariaghojavand@gmail.com>
 Description: Scal CLI tool
-Homepage: https://github.com/Amir-Ghojavand/scal" > deb/scal/DEBIAN/control
+Homepage: https://github.com/ariaghojavand/scal" > deb/scal/DEBIAN/control
           dpkg-deb --build deb/scal
           mv deb/scal.deb artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.deb
 
@@ -81,10 +82,11 @@ Scal CLI tool
 * $(date +"%a %b %d %Y") Aria Ghojavand <ariaghojavand@gmail.com> 1.0.0-1
 - Initial release" > rpm/SPECS/scal.spec
           rpmbuild --define "_topdir $(pwd)/rpm" -bb rpm/SPECS/scal.spec
-          mv rpm/RPMS/${{ matrix.goarch }}/scal-1.0.0-1.${{ matrix.goarch }}.rpm artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.rpm
+          find rpm/RPMS -name "*.rpm" -exec mv {} artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.rpm \;
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: scal-${{ matrix.goos }}-${{ matrix.goarch }}
           path: artifacts/*
+```
