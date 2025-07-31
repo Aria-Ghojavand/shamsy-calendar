@@ -25,16 +25,6 @@ jobs:
         with:
           go-version: '1.24'
 
-      - name: Show Go & repo info
-        run: |
-          go version
-          go env
-
-      - name: Show repo tree
-        run: |
-          echo "PWD: $(pwd)"
-          ls -R .
-
       - name: Download dependencies
         run: go mod download
 
@@ -44,23 +34,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y rpm dpkg-dev
 
-      - name: Verbose Go build
+      - name: Build binary
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p artifacts
-          go build -v -x -o artifacts/debug-${{ matrix.goos }}-${{ matrix.goarch }} .
-
-      # packaging steps unchanged—
-      # once build succeeds you can revert "Verbose Go build" to your normal "Build binary" step
+          BIN=scal-${{ matrix.goos }}-${{ matrix.goarch }}
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            BIN=$BIN.exe
+          fi
+          go build -o artifacts/$BIN .
 
       - name: Create .deb
         if: matrix.goos == 'linux'
         run: |
           BIN=scal-${{ matrix.goos }}-${{ matrix.goarch }}
           mkdir -p deb/scal/usr/local/bin deb/scal/DEBIAN
-          cp artifacts/debug-${{ matrix.goos }}-${{ matrix.goarch }} deb/scal/usr/local/bin/scal
+          cp artifacts/$BIN deb/scal/usr/local/bin/scal
           chmod +x deb/scal/usr/local/bin/scal
 
           cat >deb/scal/DEBIAN/control <<EOF
@@ -78,23 +69,20 @@ jobs:
           mv deb/scal.deb artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.deb
 
       - name: Create .rpm
-        if: matrix.goos == 'linux'
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
         run: |
-          # Always build RPM for x86_64
           ARCH=x86_64
+          BIN=scal-linux-amd64
 
-          # Prepare rpmbuild folders
           mkdir -p rpm/BUILD \
                    rpm/RPMS/$ARCH \
                    rpm/SOURCES \
                    rpm/SPECS \
                    rpm/SRPMS
 
-          # Copy in the built binary (for whichever arch you built)
-          cp artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }} rpm/BUILD/scal
+          cp artifacts/$BIN rpm/BUILD/scal
           chmod +x rpm/BUILD/scal
 
-          # Write the spec file, using the fixed ARCH
           cat >rpm/SPECS/scal.spec <<EOF
           Name: scal
           Version: 1.0.0
@@ -119,16 +107,12 @@ jobs:
           - Initial release
           EOF
 
-          # Build the RPM for x86_64
           rpmbuild --define "_topdir $(pwd)/rpm" \
                    --target "$ARCH" \
                    -bb rpm/SPECS/scal.spec
 
-          # Move the resulting package
           mv rpm/RPMS/$ARCH/scal-1.0.0-1.$ARCH.rpm \
-             artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.rpm
-
-
+             artifacts/scal-linux-amd64.rpm
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
