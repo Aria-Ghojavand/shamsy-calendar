@@ -70,7 +70,7 @@ View Month with Holidays:Display a month and list its holidays:
   ```sh
   scal 1404 1 --show-holidays
   ```
-
+```sh
 Example Output:
  ==========Farvardin 1404============
    Sh   Ye   Do   Se   Ch   Pa   Jo
@@ -80,13 +80,12 @@ Example Output:
    22   23   24   25   26   27   28
    29   30   31
 
-
 📌 Holidays in this month:
 - 01 Farvardin: Nowruz
 ...
 ..
 .
-
+```
 ---
 
 ## Future Improvements
