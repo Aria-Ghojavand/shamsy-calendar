@@ -10,7 +10,7 @@ on:
 
 env:
   GO_VERSION: '1.24'
-  APP_NAME: 'shamsy-calendar'
+  APP_NAME: 'scal'
 
 jobs:
   test:
@@ -73,7 +73,12 @@ jobs:
     
     - name: Get version
       id: version
-      run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      run: |
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        else
+          echo "version=0.0.0-dev" >> $GITHUB_OUTPUT
+        fi
     
     - name: Build binary
       env:
@@ -112,7 +117,12 @@ jobs:
     
     - name: Get version
       id: version
-      run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      run: |
+        if [[ $GITHUB_REF == refs/tags/* ]]; then
+          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        else
+          echo "version=0.0.0-dev" >> $GITHUB_OUTPUT
+        fi
     
     - name: Install packaging tools
       run: |
@@ -125,6 +135,12 @@ jobs:
         ARCH="${{ matrix.arch }}"
         PKG_DIR="deb-pkg"
         
+        # Clean version (remove 'v' prefix and ensure it starts with digit)
+        CLEAN_VERSION="${VERSION#v}"
+        if [[ ! $CLEAN_VERSION =~ ^[0-9] ]]; then
+          CLEAN_VERSION="0.0.0-${CLEAN_VERSION}"
+        fi
+        
         mkdir -p ${PKG_DIR}/DEBIAN
         mkdir -p ${PKG_DIR}/usr/bin
         
@@ -135,7 +151,7 @@ jobs:
         # Create control file
         cat > ${PKG_DIR}/DEBIAN/control << EOF
         Package: ${{ env.APP_NAME }}
-        Version: ${VERSION#v}
+        Version: ${CLEAN_VERSION}
         Section: utils
         Priority: optional
         Architecture: ${ARCH}
@@ -145,12 +161,18 @@ jobs:
         EOF
         
         # Build package
-        dpkg-deb --build ${PKG_DIR} ${{ env.APP_NAME }}_${VERSION#v}_${ARCH}.deb
+        dpkg-deb --build ${PKG_DIR} ${{ env.APP_NAME }}_${CLEAN_VERSION}_${ARCH}.deb
     
     - name: Create RPM package
       run: |
         VERSION="${{ steps.version.outputs.version }}"
         ARCH="${{ matrix.arch }}"
+        
+        # Clean version (remove 'v' prefix and ensure it starts with digit)
+        CLEAN_VERSION="${VERSION#v}"
+        if [[ ! $CLEAN_VERSION =~ ^[0-9] ]]; then
+          CLEAN_VERSION="0.0.0-${CLEAN_VERSION}"
+        fi
         
         mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
         mkdir -p ~/rpmbuild/BUILDROOT/usr/bin
@@ -162,7 +184,7 @@ jobs:
         # Create spec file
         cat > ~/rpmbuild/SPECS/${{ env.APP_NAME }}.spec << EOF
         Name: ${{ env.APP_NAME }}
-        Version: ${VERSION#v}
+        Version: ${CLEAN_VERSION}
         Release: 1
         Summary: Persian Calendar CLI
         License: MIT
@@ -174,13 +196,13 @@ jobs:
         /usr/bin/${{ env.APP_NAME }}
         
         %changelog
-        * $(date "+%a %b %d %Y") Developer <dev@example.com> - ${VERSION#v}-1
+        * $(date "+%a %b %d %Y") Developer <dev@example.com> - ${CLEAN_VERSION}-1
         - Release ${VERSION}
         EOF
         
         # Build RPM
         rpmbuild --define "_topdir $HOME/rpmbuild" --define "_rpmdir ." -bb ~/rpmbuild/SPECS/${{ env.APP_NAME }}.spec
-        find . -name "*.rpm" -exec mv {} ${{ env.APP_NAME }}-${VERSION#v}-1.${ARCH}.rpm \;
+        find . -name "*.rpm" -exec mv {} ${{ env.APP_NAME }}-${CLEAN_VERSION}-1.${ARCH}.rpm \;
     
     - name: Upload packages
       uses: actions/upload-artifact@v4
@@ -216,7 +238,7 @@ jobs:
         TAG_NAME=${GITHUB_REF#refs/tags/}
         
         cat > release_notes.md << EOF
-        ## Shamsy Calendar ${TAG_NAME}
+        ## Scal ${TAG_NAME}
         
         Persian (Solar Hijri) calendar CLI tool.
         
@@ -224,26 +246,26 @@ jobs:
         
         **Linux (DEB):**
         \`\`\`bash
-        sudo dpkg -i shamsy-calendar_*_amd64.deb
+        sudo dpkg -i scal_*_amd64.deb
         \`\`\`
         
         **Linux (RPM):**
         \`\`\`bash
-        sudo rpm -i shamsy-calendar-*-1.amd64.rpm
+        sudo rpm -i scal-*-1.amd64.rpm
         \`\`\`
         
         **Binary:**
         \`\`\`bash
-        chmod +x shamsy-calendar-*
-        sudo mv shamsy-calendar-* /usr/local/bin/shamsy-calendar
+        chmod +x scal-*
+        sudo mv scal-* /usr/local/bin/scal
         \`\`\`
         
         ### Usage
         \`\`\`bash
-        shamsy-calendar                    # Current month
-        shamsy-calendar 1403               # Full year
-        shamsy-calendar 1403 6             # Specific month
-        shamsy-calendar 1403 6 --show-holidays  # With holidays
+        scal                    # Current month
+        scal 1403               # Full year
+        scal 1403 6             # Specific month
+        scal 1403 6 --show-holidays  # With holidays
         \`\`\`
         EOF
     
