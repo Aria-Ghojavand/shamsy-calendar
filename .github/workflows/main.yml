@@ -1,3 +1,10 @@
+name: Build Scal CLI
+
+on:
+  push:
+    branches:
+      - '**'
+
 jobs:
   build:
     runs-on: ubuntu-latest
