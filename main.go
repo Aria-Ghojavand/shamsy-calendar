@@ -15,6 +15,8 @@ import (
 	"github.com/schollz/progressbar/v3"
 )
 
+var version = "dev" // This will be set during build
+
 type Color struct{ r, g, b int }
 
 func rgb(c Color, s string) string {
@@ -54,7 +56,7 @@ func fetchHolidays(year int) (map[string]string, error) {
 	}
 
 	bar := progressbar.NewOptions(-1,
-		progressbar.OptionSetDescription("Fetching holidays... \n"),
+		progressbar.OptionSetDescription("Fetching holidays..."),
 		progressbar.OptionSpinnerType(14),
 		progressbar.OptionSetWidth(20),
 	)
@@ -338,11 +340,11 @@ func printshamsyCalendar(jy, jm, highlight int, holidays map[string]string) {
 		}
 		fmt.Println()
 	}
-	fmt.Println("\n")
+	fmt.Print("\n")
 }
 
 func printHolidaysOfMonth(jy, jm int, holidays map[string]string) {
-	fmt.Println("\n📌 Holidays in this month:")
+	fmt.Println("📌 Holidays in this month:")
 	found := false
 	for d := 1; d <= shamsyMonthDays(jy, jm); d++ {
 		key := fmt.Sprintf("%d-%02d-%02d", jy, jm, d)
