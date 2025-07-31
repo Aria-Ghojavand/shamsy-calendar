@@ -80,10 +80,25 @@ jobs:
       - name: Create .rpm
         if: matrix.goos == 'linux'
         run: |
-          BIN=scal-${{ matrix.goos }}-${{ matrix.goarch }}
-          mkdir -p rpm/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-          cp artifacts/debug-${{ matrix.goos }}-${{ matrix.goarch }} rpm/BUILD/scal
+          # 1) Determine the RPM architecture name
+          if [ "${{ matrix.goarch }}" = "amd64" ]; then
+            ARCH=x86_64
+          else
+            ARCH=aarch64
+          fi
 
+          # 2) Prepare rpmbuild directories (including arch-specific RPMS folder)
+          mkdir -p rpm/BUILD \
+                   rpm/RPMS/$ARCH \
+                   rpm/SOURCES \
+                   rpm/SPECS \
+                   rpm/SRPMS
+
+          # 3) Copy the built binary into BUILD/
+          cp artifacts/debug-${{ matrix.goos }}-${{ matrix.goarch }} rpm/BUILD/scal
+          chmod +x rpm/BUILD/scal
+
+          # 4) Generate spec file, embedding $ARCH
           cat >rpm/SPECS/scal.spec <<EOF
           Name: scal
           Version: 1.0.0
@@ -108,8 +123,15 @@ jobs:
           - Initial release
           EOF
 
-          rpmbuild --define "_topdir $(pwd)/rpm" --target "$ARCH" -bb rpm/SPECS/scal.spec
-          mv rpm/RPMS/$ARCH/scal-1.0.0-1.$ARCH.rpm artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.rpm
+          # 5) Build the RPM
+          rpmbuild --define "_topdir $(pwd)/rpm" \
+                   --target "$ARCH" \
+                   -bb rpm/SPECS/scal.spec
+
+          # 6) Move the resulting .rpm into artifacts/
+          mv rpm/RPMS/$ARCH/scal-1.0.0-1.$ARCH.rpm \
+             artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.rpm
+
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
