@@ -9,70 +9,71 @@ on:
   workflow_dispatch:
 
 env:
-  GO_VERSION: '1.21'
+  GO_VERSION: '1.24'
   APP_NAME: 'shamsy-calendar'
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
     
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
         go-version: ${{ env.GO_VERSION }}
+        cache: false
     
     - name: Download dependencies
       run: go mod download
+    
 
-  build-binaries:
+  build:
     needs: test
-    timeout-minutes: 20
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Core platforms
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
-            suffix: linux-amd64
+            name: linux-amd64
           - os: ubuntu-latest
             goos: linux
             goarch: arm64
-            suffix: linux-arm64
-          - os: windows-latest
+            name: linux-arm64
+          - os: ubuntu-latest
             goos: windows
             goarch: amd64
-            suffix: windows-amd64.exe
-          - os: macos-latest
+            name: windows-amd64
+            ext: .exe
+          - os: ubuntu-latest
             goos: darwin
             goarch: amd64
-            suffix: darwin-amd64
-          - os: macos-latest
+            name: darwin-amd64
+          - os: ubuntu-latest
             goos: darwin
             goarch: arm64
-            suffix: darwin-arm64
+            name: darwin-arm64
     
     runs-on: ${{ matrix.os }}
     
     steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+    - name: Checkout code
+      uses: actions/checkout@v4
     
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
         go-version: ${{ env.GO_VERSION }}
+        cache: false
     
     - name: Get version
       id: version
-      run: |
-        echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-      shell: bash
+      run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
     
     - name: Build binary
       env:
@@ -81,33 +82,33 @@ jobs:
         CGO_ENABLED: 0
       run: |
         mkdir -p dist
-        go build -ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}" -o dist/${{ env.APP_NAME }}-${{ matrix.suffix }} .
-      shell: bash
+        go build -ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}" -o dist/${{ env.APP_NAME }}-${{ matrix.name }}${{ matrix.ext }} .
     
-    - name: Upload artifacts
+    - name: Upload binary
       uses: actions/upload-artifact@v4
       with:
-        name: binary-${{ matrix.suffix }}
-        path: dist/${{ env.APP_NAME }}-${{ matrix.suffix }}
-        retention-days: 5
+        name: ${{ env.APP_NAME }}-${{ matrix.name }}
+        path: dist/${{ env.APP_NAME }}-${{ matrix.name }}${{ matrix.ext }}
+        retention-days: 1
 
-  build-packages:
-    needs: build-binaries
+  package-linux:
+    needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         arch: [amd64, arm64]
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
     
-    - name: Download Linux binary
+    - name: Download binary
       uses: actions/download-artifact@v4
       with:
-        name: binary-linux-${{ matrix.arch }}
-        path: dist/
+        name: ${{ env.APP_NAME }}-linux-${{ matrix.arch }}
+        path: .
     
     - name: Get version
       id: version
@@ -115,39 +116,36 @@ jobs:
     
     - name: Install packaging tools
       run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y --no-install-recommends dpkg-dev rpm
+        sudo apt-get update
+        sudo apt-get install -y dpkg-dev rpm
     
     - name: Create DEB package
       run: |
         VERSION="${{ steps.version.outputs.version }}"
         ARCH="${{ matrix.arch }}"
+        PKG_DIR="deb-pkg"
         
-        # Create package structure
-        mkdir -p packaging/deb/${{ env.APP_NAME }}-${VERSION}-${ARCH}/DEBIAN
-        mkdir -p packaging/deb/${{ env.APP_NAME }}-${VERSION}-${ARCH}/usr/bin
-        mkdir -p packaging/deb/${{ env.APP_NAME }}-${VERSION}-${ARCH}/usr/share/doc/${{ env.APP_NAME }}
+        mkdir -p ${PKG_DIR}/DEBIAN
+        mkdir -p ${PKG_DIR}/usr/bin
         
         # Copy binary
-        cp dist/${{ env.APP_NAME }}-linux-${ARCH} packaging/deb/${{ env.APP_NAME }}-${VERSION}-${ARCH}/usr/bin/${{ env.APP_NAME }}
-        chmod +x packaging/deb/${{ env.APP_NAME }}-${VERSION}-${ARCH}/usr/bin/${{ env.APP_NAME }}
+        cp ${{ env.APP_NAME }}-linux-${ARCH} ${PKG_DIR}/usr/bin/${{ env.APP_NAME }}
+        chmod 755 ${PKG_DIR}/usr/bin/${{ env.APP_NAME }}
         
         # Create control file
-        cat > packaging/deb/${{ env.APP_NAME }}-${VERSION}-${ARCH}/DEBIAN/control << EOF
+        cat > ${PKG_DIR}/DEBIAN/control << EOF
         Package: ${{ env.APP_NAME }}
         Version: ${VERSION#v}
         Section: utils
         Priority: optional
         Architecture: ${ARCH}
-        Maintainer: Shamsy Calendar <shamsy@example.com>
-        Description: Persian (Shamsy) Calendar CLI Tool
-         A command-line Persian calendar application that displays Shamsy dates
-         with holiday information and supports various output formats.
+        Maintainer: Developer <dev@example.com>
+        Description: Persian Calendar CLI
+         Command-line Persian calendar tool
         EOF
         
-        # Build DEB
-        dpkg-deb --build packaging/deb/${{ env.APP_NAME }}-${VERSION}-${ARCH}
-        mv packaging/deb/${{ env.APP_NAME }}-${VERSION}-${ARCH}.deb dist/
+        # Build package
+        dpkg-deb --build ${PKG_DIR} ${{ env.APP_NAME }}_${VERSION#v}_${ARCH}.deb
     
     - name: Create RPM package
       run: |
@@ -155,58 +153,52 @@ jobs:
         ARCH="${{ matrix.arch }}"
         
         mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+        mkdir -p ~/rpmbuild/BUILDROOT/usr/bin
+        
+        # Copy binary
+        cp ${{ env.APP_NAME }}-linux-${ARCH} ~/rpmbuild/BUILDROOT/usr/bin/${{ env.APP_NAME }}
+        chmod 755 ~/rpmbuild/BUILDROOT/usr/bin/${{ env.APP_NAME }}
         
         # Create spec file
         cat > ~/rpmbuild/SPECS/${{ env.APP_NAME }}.spec << EOF
-        Name:           ${{ env.APP_NAME }}
-        Version:        ${VERSION#v}
-        Release:        1%{?dist}
-        Summary:        Persian (Shamsy) Calendar CLI Tool
-        
-        License:        MIT
-        URL:            https://github.com/${{ github.repository }}
+        Name: ${{ env.APP_NAME }}
+        Version: ${VERSION#v}
+        Release: 1
+        Summary: Persian Calendar CLI
+        License: MIT
         
         %description
-        A command-line Persian calendar application that displays Shamsy dates
-        with holiday information and supports various output formats.
-        
-        %prep
-        
-        %build
-        
-        %install
-        mkdir -p %{buildroot}/usr/bin
-        cp ${{ github.workspace }}/dist/${{ env.APP_NAME }}-linux-${ARCH} %{buildroot}/usr/bin/${{ env.APP_NAME }}
+        Command-line Persian calendar tool
         
         %files
         /usr/bin/${{ env.APP_NAME }}
         
         %changelog
-        * $(date "+%a %b %d %Y") Shamsy Calendar <shamsy@example.com> - ${VERSION#v}-1
+        * $(date "+%a %b %d %Y") Developer <dev@example.com> - ${VERSION#v}-1
         - Release ${VERSION}
         EOF
         
         # Build RPM
-        VERSION=${{ steps.version.outputs.version }} rpmbuild -bb ~/rpmbuild/SPECS/${{ env.APP_NAME }}.spec
-        find ~/rpmbuild/RPMS -name "*.rpm" -exec cp {} dist/ \;
+        rpmbuild --define "_topdir $HOME/rpmbuild" --define "_rpmdir ." -bb ~/rpmbuild/SPECS/${{ env.APP_NAME }}.spec
+        find . -name "*.rpm" -exec mv {} ${{ env.APP_NAME }}-${VERSION#v}-1.${ARCH}.rpm \;
     
     - name: Upload packages
       uses: actions/upload-artifact@v4
       with:
         name: packages-${{ matrix.arch }}
         path: |
-          dist/*.deb
-          dist/*.rpm
-        retention-days: 5
+          *.deb
+          *.rpm
+        retention-days: 1
 
   release:
-    needs: [build-binaries, build-packages]
+    needs: [build, package-linux]
     runs-on: ubuntu-latest
-    timeout-minutes: 10    
+    timeout-minutes: 5
+    
     steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+    - name: Checkout code
+      uses: actions/checkout@v4
     
     - name: Download all artifacts
       uses: actions/download-artifact@v4
@@ -214,65 +206,51 @@ jobs:
         path: artifacts
         merge-multiple: true
     
-    - name: Organize artifacts
+    - name: List artifacts
       run: |
-        mkdir -p release
-        find artifacts -type f \( -name "${{ env.APP_NAME }}-*" -o -name "*.deb" -o -name "*.rpm" \) -exec cp {} release/ \;
-        ls -la release/
+        echo "Downloaded artifacts:"
+        find artifacts -type f -exec ls -la {} \;
     
     - name: Generate release notes
-      id: release_notes
       run: |
         TAG_NAME=${GITHUB_REF#refs/tags/}
-        PREV_TAG=$(git describe --abbrev=0 --tags $TAG_NAME^ 2>/dev/null || echo "")
         
         cat > release_notes.md << EOF
-        ## 🎉 Shamsy Calendar $TAG_NAME
+        ## Shamsy Calendar ${TAG_NAME}
         
-        Persian (Solar Hijri) calendar CLI tool with holiday support.
+        Persian (Solar Hijri) calendar CLI tool.
         
-        ### 📥 Downloads
+        ### Installation
         
-        #### Linux
-        - **DEB packages**: \`sudo dpkg -i shamsy-calendar-*.deb\`
-        - **RPM packages**: \`sudo rpm -i shamsy-calendar-*.rpm\`
-        - **Binary**: \`chmod +x shamsy-calendar-linux-* && sudo mv shamsy-calendar-linux-* /usr/local/bin/shamsy-calendar\`
-        
-        #### Windows
-        - **EXE**: Download and run \`shamsy-calendar-windows-amd64.exe\`
-        
-        #### macOS
-        - **Binary**: \`chmod +x shamsy-calendar-darwin-* && sudo mv shamsy-calendar-darwin-* /usr/local/bin/shamsy-calendar\`
-        
-        ### 🚀 Usage
-        
+        **Linux (DEB):**
         \`\`\`bash
-        # Show current month
-        shamsy-calendar
-        
-        # Show specific year
-        shamsy-calendar 1403
-        
-        # Show specific month with holidays
-        shamsy-calendar 1403 6 --show-holidays
+        sudo dpkg -i shamsy-calendar_*_amd64.deb
         \`\`\`
         
-        ### 📋 Changes
+        **Linux (RPM):**
+        \`\`\`bash
+        sudo rpm -i shamsy-calendar-*-1.amd64.rpm
+        \`\`\`
+        
+        **Binary:**
+        \`\`\`bash
+        chmod +x shamsy-calendar-*
+        sudo mv shamsy-calendar-* /usr/local/bin/shamsy-calendar
+        \`\`\`
+        
+        ### Usage
+        \`\`\`bash
+        shamsy-calendar                    # Current month
+        shamsy-calendar 1403               # Full year
+        shamsy-calendar 1403 6             # Specific month
+        shamsy-calendar 1403 6 --show-holidays  # With holidays
+        \`\`\`
         EOF
-        
-        if [ -n "$PREV_TAG" ]; then
-          echo "" >> release_notes.md
-          git log --pretty=format:"- %s" $PREV_TAG..$TAG_NAME >> release_notes.md
-        else
-          echo "- Initial release" >> release_notes.md
-        fi
-        
-        cat release_notes.md
     
     - name: Create Release
       uses: softprops/action-gh-release@v2
       with:
-        files: release/*
+        files: artifacts/*
         body_path: release_notes.md
         draft: false
         prerelease: false
