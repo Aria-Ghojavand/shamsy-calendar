@@ -17,8 +17,11 @@ jobs:
             goarch: arm64
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
           go-version: '1.24'
 
@@ -34,10 +37,12 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           output="scal-${{ matrix.goos }}-${{ matrix.goarch }}"
-          [ "${{ matrix.goos }}" = "windows" ] && output="${output}.exe"
-          go build -o $output main.go
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            output="${output}.exe"
+          fi
+          go build -o "$output" main.go
           mkdir -p artifacts
-          mv $output artifacts/
+          mv "$output" artifacts/
 
       - name: Create .deb
         if: matrix.goos == 'linux'
@@ -47,7 +52,6 @@ jobs:
           chmod +x deb/scal/usr/local/bin/scal
 
           mkdir -p deb/scal/DEBIAN
-          # <-- no spaces before "Package:" etc.
           cat > deb/scal/DEBIAN/control <<EOF
 Package: scal
 Version: 1.0.0
@@ -71,7 +75,7 @@ EOF
             target_arch="aarch64"
           fi
 
-          mkdir -p rpm/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          mkdir -p rpm/BUILD rpm/RPMS rpm/SOURCES rpm/SPECS rpm/SRPMS
           cp artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }} rpm/BUILD/scal
 
           cat > rpm/SPECS/scal.spec <<EOF
@@ -98,10 +102,11 @@ install -m 0755 %{_topdir}/BUILD/scal %{buildroot}/usr/local/bin/scal
 - Initial release
 EOF
 
-          rpmbuild --define "_topdir $(pwd)/rpm" --target $target_arch -bb rpm/SPECS/scal.spec
+          rpmbuild --define "_topdir $(pwd)/rpm" --target "$target_arch" -bb rpm/SPECS/scal.spec
           find rpm/RPMS -name '*.rpm' -exec mv {} artifacts/scal-${{ matrix.goos }}-${{ matrix.goarch }}.rpm \;
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
           name: scal-${{ matrix.goos }}-${{ matrix.goarch }}
           path: artifacts/*
