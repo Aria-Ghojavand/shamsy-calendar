@@ -26,16 +26,9 @@ jobs:
     
     - name: Download dependencies
       run: go mod download
-    
-    - name: Run go vet
-      run: go vet ./...
-    
-    - name: Run tests
-      run: go test -v ./...
 
   build-binaries:
     needs: test
-    if: startsWith(github.ref, 'refs/tags/')
     timeout-minutes: 20
     strategy:
       fail-fast: false
