@@ -1,122 +1,396 @@
-name: Build and Package
+name: Build and Release
 
 on:
   push:
-    branches: [main]
+    tags:
+      - 'v*'
   pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  GO_VERSION: '1.24'
+  APP_NAME: 'scal'
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
-
-    env:
-      APP_NAME: scal
-      VERSION: 1.0.0
-      ARCH: amd64
-
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-
+    - uses: actions/checkout@v4
+    
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.21'
+        go-version: ${{ env.GO_VERSION }}
+    
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+    
+    - name: Run tests
+      run: go test -v ./...
+    
+    - name: Run go vet
+      run: go vet ./...
 
-    - name: Build Linux binary
-      run: GOOS=linux GOARCH=${{ env.ARCH }} go build -o ${{ env.APP_NAME }}-linux
-
-    - name: Build Windows binary
-      run: GOOS=windows GOARCH=${{ env.ARCH }} go build -o ${{ env.APP_NAME }}.exe
-
-    - name: Build macOS binary
-      run: GOOS=darwin GOARCH=${{ env.ARCH }} go build -o ${{ env.APP_NAME }}-macos
-
-    - name: Install deb and rpm tools
-      run: sudo apt-get update && sudo apt-get install -y dpkg rpm
-
-    - name: Create .deb package
+  build:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/')
+    strategy:
+      matrix:
+        include:
+          # Linux builds
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            suffix: linux-amd64
+            build_deb: true
+            build_rpm: true
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            suffix: linux-arm64
+            build_deb: true
+            build_rpm: true
+          - os: ubuntu-latest
+            goos: linux
+            goarch: 386
+            suffix: linux-386
+            build_deb: true
+            build_rpm: true
+          
+          # Windows builds
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            suffix: windows-amd64.exe
+            build_exe: true
+          - os: windows-latest
+            goos: windows
+            goarch: 386
+            suffix: windows-386.exe
+            build_exe: true
+          - os: windows-latest
+            goos: windows
+            goarch: arm64
+            suffix: windows-arm64.exe
+            build_exe: true
+          
+          # macOS builds
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            suffix: darwin-amd64
+            build_dmg: true
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            suffix: darwin-arm64
+            build_dmg: true
+    
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+    
+    - name: Get version
+      id: version
       run: |
-        mkdir -p ${{ env.APP_NAME }}_deb/usr/local/bin
-        cp ${{ env.APP_NAME }}-linux ${{ env.APP_NAME }}_deb/usr/local/bin/${{ env.APP_NAME }}
-        chmod 755 ${{ env.APP_NAME }}_deb/usr/local/bin/${{ env.APP_NAME }}
-
-        mkdir -p ${{ env.APP_NAME }}_deb/DEBIAN
-        echo "Package: ${{ env.APP_NAME }}" > ${{ env.APP_NAME }}_deb/DEBIAN/control
-        echo "Version: ${{ env.VERSION }}" >> ${{ env.APP_NAME }}_deb/DEBIAN/control
-        echo "Section: utils" >> ${{ env.APP_NAME }}_deb/DEBIAN/control
-        echo "Priority: optional" >> ${{ env.APP_NAME }}_deb/DEBIAN/control
-        echo "Architecture: ${{ env.ARCH }}" >> ${{ env.APP_NAME }}_deb/DEBIAN/control
-        echo "Maintainer: Your Name <you@example.com>" >> ${{ env.APP_NAME }}_deb/DEBIAN/control
-        echo "Description: ${{ env.APP_NAME }} - A Go CLI app" >> ${{ env.APP_NAME }}_deb/DEBIAN/control
-
-        dpkg-deb --build ${{ env.APP_NAME }}_deb
-
-    - name: Create .rpm package
+        if [[ "${{ runner.os }}" == "Windows" ]]; then
+          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        else
+          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+      shell: bash
+    
+    - name: Build binary
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+        CGO_ENABLED: 0
+      run: |
+        mkdir -p dist
+        if [[ "${{ matrix.goos }}" == "windows" ]]; then
+          go build -ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}" -o dist/${{ env.APP_NAME }}-${{ matrix.suffix }} .
+        else
+          go build -ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}" -o dist/${{ env.APP_NAME }}-${{ matrix.suffix }} .
+        fi
+      shell: bash
+    
+    # Linux package builds
+    - name: Install packaging tools (Linux)
+      if: matrix.build_deb || matrix.build_rpm
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y dpkg-dev rpm build-essential
+    
+    - name: Create DEB package
+      if: matrix.build_deb
+      run: |
+        mkdir -p packaging/deb/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.goarch }}/DEBIAN
+        mkdir -p packaging/deb/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.goarch }}/usr/bin
+        mkdir -p packaging/deb/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.goarch }}/usr/share/doc/${{ env.APP_NAME }}
+        
+        # Copy binary
+        cp dist/${{ env.APP_NAME }}-${{ matrix.suffix }} packaging/deb/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.goarch }}/usr/bin/${{ env.APP_NAME }}
+        chmod +x packaging/deb/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.goarch }}/usr/bin/${{ env.APP_NAME }}
+        
+        # Create control file
+        cat > packaging/deb/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.goarch }}/DEBIAN/control << EOF
+        Package: ${{ env.APP_NAME }}
+        Version: ${{ steps.version.outputs.version }}
+        Section: utils
+        Priority: optional
+        Architecture: ${{ matrix.goarch }}
+        Maintainer: Your Name <your.email@example.com>
+        Description: Your Go Application
+         A description of your Go application.
+        EOF
+        
+        # Create changelog
+        cat > packaging/deb/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.goarch }}/usr/share/doc/${{ env.APP_NAME }}/changelog << EOF
+        ${{ env.APP_NAME }} (${{ steps.version.outputs.version }}) unstable; urgency=medium
+        
+          * Release ${{ steps.version.outputs.version }}
+        
+         -- Your Name <your.email@example.com>  $(date -R)
+        EOF
+        
+        # Build DEB
+        dpkg-deb --build packaging/deb/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.goarch }}
+        mv packaging/deb/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-${{ matrix.goarch }}.deb dist/
+    
+    - name: Create RPM package
+      if: matrix.build_rpm
       run: |
         mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-        mkdir -p ${{ env.APP_NAME }}-${{ env.VERSION }}
-        cp ${{ env.APP_NAME }}-linux ${{ env.APP_NAME }}-${{ env.VERSION }}/
-        tar czf ${{ env.APP_NAME }}-${{ env.VERSION }}.tar.gz ${{ env.APP_NAME }}-${{ env.VERSION }}
-        mv ${{ env.APP_NAME }}-${{ env.VERSION }}.tar.gz ~/rpmbuild/SOURCES/
-
-        cat << 'EOF' > ~/rpmbuild/SPECS/${{ env.APP_NAME }}.spec
-Name:           scal
-Version:        1.0.0
-Release:        1%{?dist}
-Summary:        scal - A Go CLI tool
-License:        MIT
-Source0:        scal-1.0.0.tar.gz
-
-BuildRequires:  golang
-Requires:
-
-%prep
-%setup -q
-
-%build
-GOOS=linux GOARCH=amd64 go build -o scal
-
-%install
-mkdir -p %{buildroot}/usr/local/bin
-install -m 0755 scal %{buildroot}/usr/local/bin/scal
-
-%files
-/usr/local/bin/scal
-
-%changelog
-* Wed Jul 31 2025 Aria(amir) Ghojavand - 1.0.0-1
-- Initial RPM build
-EOF
-
-        rpmbuild -ba ~/rpmbuild/SPECS/scal.spec
-
-    - name: Upload Linux binary
+        
+        # Create spec file
+        cat > ~/rpmbuild/SPECS/${{ env.APP_NAME }}.spec << EOF
+        Name:           ${{ env.APP_NAME }}
+        Version:        ${VERSION#v}
+        Release:        1%{?dist}
+        Summary:        Your Go Application
+        
+        License:        MIT
+        URL:            https://github.com/${{ github.repository }}
+        Source0:        %{name}-%{version}.tar.gz
+        
+        BuildRequires:  golang >= 1.19
+        
+        %description
+        A description of your Go application.
+        
+        %prep
+        
+        %build
+        
+        %install
+        mkdir -p %{buildroot}/usr/bin
+        cp ${{ github.workspace }}/dist/${{ env.APP_NAME }}-${{ matrix.suffix }} %{buildroot}/usr/bin/${{ env.APP_NAME }}
+        
+        %files
+        /usr/bin/${{ env.APP_NAME }}
+        
+        %changelog
+        * $(date "+%a %b %d %Y") Your Name <your.email@example.com> - ${VERSION#v}-1
+        - Release ${{ steps.version.outputs.version }}
+        EOF
+        
+        # Build RPM
+        VERSION=${{ steps.version.outputs.version }} rpmbuild -bb ~/rpmbuild/SPECS/${{ env.APP_NAME }}.spec
+        find ~/rpmbuild/RPMS -name "*.rpm" -exec cp {} dist/ \;
+    
+    # Windows MSI/EXE installer
+    - name: Create Windows installer
+      if: matrix.build_exe && matrix.goarch == 'amd64'
+      run: |
+        # Create a simple batch installer
+        cat > dist/install-${{ env.APP_NAME }}-${{ matrix.suffix }}.bat << 'EOF'
+        @echo off
+        echo Installing ${{ env.APP_NAME }}...
+        if not exist "C:\Program Files\${{ env.APP_NAME }}" mkdir "C:\Program Files\${{ env.APP_NAME }}"
+        copy "%~dp0${{ env.APP_NAME }}-${{ matrix.suffix }}" "C:\Program Files\${{ env.APP_NAME }}\${{ env.APP_NAME }}.exe"
+        echo Installation complete!
+        pause
+        EOF
+      shell: bash
+    
+    # macOS DMG creation
+    - name: Create macOS DMG
+      if: matrix.build_dmg
+      run: |
+        mkdir -p dist/dmg
+        cp dist/${{ env.APP_NAME }}-${{ matrix.suffix }} dist/dmg/${{ env.APP_NAME }}
+        
+        # Create a simple DMG
+        hdiutil create -volname "${{ env.APP_NAME }}" -srcfolder dist/dmg -ov -format UDZO dist/${{ env.APP_NAME }}-${{ matrix.suffix }}.dmg
+    
+    - name: Upload artifacts
       uses: actions/upload-artifact@v3
       with:
-        name: scal-linux
-        path: scal-linux
+        name: ${{ env.APP_NAME }}-${{ matrix.suffix }}
+        path: |
+          dist/${{ env.APP_NAME }}-${{ matrix.suffix }}*
+          dist/*.deb
+          dist/*.rpm
+          dist/*.dmg
+          dist/install-*.bat
 
-    - name: Upload Windows binary
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+      with:
+        path: artifacts
+    
+    - name: Organize artifacts
+      run: |
+        mkdir -p release
+        find artifacts -type f \( -name "${{ env.APP_NAME }}-*" -o -name "*.deb" -o -name "*.rpm" -o -name "*.dmg" -o -name "install-*.bat" \) -exec cp {} release/ \;
+        ls -la release/
+    
+    - name: Generate release notes
+      id: release_notes
+      run: |
+        # Get the tag name
+        TAG_NAME=${GITHUB_REF#refs/tags/}
+        
+        # Get previous tag
+        PREV_TAG=$(git describe --abbrev=0 --tags $TAG_NAME^ 2>/dev/null || echo "")
+        
+        # Generate changelog
+        echo "## Release $TAG_NAME" > release_notes.md
+        echo "" >> release_notes.md
+        echo "### Changes" >> release_notes.md
+        
+        if [ -n "$PREV_TAG" ]; then
+          echo "Changes since $PREV_TAG:" >> release_notes.md
+          echo "" >> release_notes.md
+          git log --pretty=format:"- %s (%an)" $PREV_TAG..$TAG_NAME >> release_notes.md
+        else
+          echo "Initial release" >> release_notes.md
+        fi
+        
+        echo "" >> release_notes.md
+        echo "### Downloads" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "#### Linux" >> release_notes.md
+        echo "- **DEB packages**: For Debian/Ubuntu systems" >> release_notes.md
+        echo "- **RPM packages**: For Red Hat/CentOS/Fedora systems" >> release_notes.md
+        echo "- **Binary releases**: Standalone executables" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "#### Windows" >> release_notes.md
+        echo "- **EXE files**: Standalone executables" >> release_notes.md
+        echo "- **Installer scripts**: Batch files for easy installation" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "#### macOS" >> release_notes.md
+        echo "- **DMG files**: Disk images for easy installation" >> release_notes.md
+        echo "- **Binary releases**: Standalone executables" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "### Supported Architectures" >> release_notes.md
+        echo "- **amd64**: 64-bit Intel/AMD processors" >> release_notes.md
+        echo "- **arm64**: 64-bit ARM processors (Apple Silicon, ARM servers)" >> release_notes.md
+        echo "- **386**: 32-bit Intel processors" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "### Installation Instructions" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "#### Linux (DEB)" >> release_notes.md
+        echo '```bash' >> release_notes.md
+        echo "sudo dpkg -i ${{ env.APP_NAME }}-*.deb" >> release_notes.md
+        echo '```' >> release_notes.md
+        echo "" >> release_notes.md
+        echo "#### Linux (RPM)" >> release_notes.md
+        echo '```bash' >> release_notes.md
+        echo "sudo rpm -i ${{ env.APP_NAME }}-*.rpm" >> release_notes.md
+        echo '```' >> release_notes.md
+        echo "" >> release_notes.md
+        echo "#### Binary Installation" >> release_notes.md
+        echo '```bash' >> release_notes.md
+        echo "# Download the appropriate binary for your system" >> release_notes.md
+        echo "chmod +x ${{ env.APP_NAME }}-*" >> release_notes.md
+        echo "sudo mv ${{ env.APP_NAME }}-* /usr/local/bin/${{ env.APP_NAME }}" >> release_notes.md
+        echo '```' >> release_notes.md
+        
+        cat release_notes.md
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: release/*
+        body_path: release_notes.md
+        draft: false
+        prerelease: false
+        generate_release_notes: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Optional: Build for additional architectures
+  build-arch:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: mips64le
+            suffix: linux-mips64le
+          - goos: linux
+            goarch: ppc64le
+            suffix: linux-ppc64le
+          - goos: linux
+            goarch: s390x
+            suffix: linux-s390x
+          - goos: freebsd
+            goarch: amd64
+            suffix: freebsd-amd64
+          - goos: openbsd
+            goarch: amd64
+            suffix: openbsd-amd64
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+    
+    - name: Get version
+      id: version
+      run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+    
+    - name: Build binary
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+        CGO_ENABLED: 0
+      run: |
+        mkdir -p dist
+        go build -ldflags="-s -w -X main.version=${{ steps.version.outputs.version }}" -o dist/${{ env.APP_NAME }}-${{ matrix.suffix }} .
+    
+    - name: Upload artifacts
       uses: actions/upload-artifact@v3
       with:
-        name: scal-windows.exe
-        path: scal.exe
-
-    - name: Upload macOS binary
-      uses: actions/upload-artifact@v3
-      with:
-        name: scal-macos
-        path: scal-macos
-
-    - name: Upload .deb
-      uses: actions/upload-artifact@v3
-      with:
-        name: scal.deb
-        path: scal_deb.deb
-
-    - name: Upload .rpm
-      uses: actions/upload-artifact@v3
-      with:
-        name: scal.rpm
-        path: ~/rpmbuild/RPMS/x86_64/scal-1.0.0-1*.rpm
+        name: ${{ env.APP_NAME }}-${{ matrix.suffix }}
+        path: dist/${{ env.APP_NAME }}-${{ matrix.suffix }}
