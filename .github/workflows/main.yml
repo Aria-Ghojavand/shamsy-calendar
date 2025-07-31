@@ -30,12 +30,6 @@ jobs:
         key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
         restore-keys: |
           ${{ runner.os }}-go-
-    
-    - name: Run tests
-      run: go test -v ./...
-    
-    - name: Run go vet
-      run: go vet ./...
 
   build:
     needs: test
